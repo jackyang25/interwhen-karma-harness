@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interwhen-karma-harness"
+version = "0.1.0"
+description = "Evaluation harness for intermediate verification of clinical AI tool calls"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jack Yang" }]
+
+dependencies = [
+    # ── External frameworks ───────────────────────────────────────────────────
+    # KARMA is installed from upstream eka-care. The Bearer token auth gap
+    # (upstream KARMA's MCP client doesn't pass an Authorization header) is
+    # closed by a runtime monkey-patch in harness/_patches.py — no
+    # fork required.
+    # TODO: pin a specific commit SHA before production runs.
+    # "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@<sha>",
+    # TODO: pin interwhen to a specific commit before production runs.
+    # "interwhen @ git+https://github.com/microsoft/interwhen.git@<sha>",
+
+    # ── MCP client ────────────────────────────────────────────────────────────
+    "fastmcp>=2.0",
+
+    # ── Data + evaluation plumbing ────────────────────────────────────────────
+    "datasets>=2.0",
+    "huggingface-hub",
+
+    # ── Analysis ──────────────────────────────────────────────────────────────
+    "pandas",
+    "numpy",
+    "scipy",          # McNemar's test
+    "statsmodels",    # Wilson confidence intervals
+]
+
+[project.optional-dependencies]
+# vLLM is heavy; install only on machines that serve the model.
+serving = ["vllm>=0.6.0"]
+# Optional Databricks experiment tracking.
+tracking = ["mlflow"]
+# Dev tooling.
+dev = ["pytest", "pytest-asyncio", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["harness*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

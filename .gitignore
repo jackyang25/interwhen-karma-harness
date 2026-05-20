@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Experiment outputs — store in DBFS/Unity Catalog/object storage, not git
+results/
+*.duckdb
+cache.db
+**/cache.db
+
+# Secrets
+.env
+.envrc
+*.token
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
