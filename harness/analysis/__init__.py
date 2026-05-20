@@ -1,12 +1,21 @@
-"""Post-run statistical analysis.
+"""Post-run statistical analysis (§7 of TESTING.md).
 
-Reads result JSON / traces from results/ (or DBFS), computes:
-- per-condition accuracy with Wilson confidence intervals,
-- error-type decomposition (wrong calculator vs wrong input; enum / unit sub-types),
-- paired McNemar tests for the confirmatory comparison family,
-- Bonferroni-adjusted p-values,
-- verifier characterization (firing rate, precision, recall, correction success,
-  false-positive cost).
-
-See TESTING.md Section 7 for the full statistical plan.
+Currently exposes the statistical primitives — Wilson CIs, McNemar's test, and
+Bonferroni correction. Error-type decomposition and verifier characterization
+land here once the relevant conditions have produced data.
 """
+from harness.analysis.stats import (
+    McNemarResult,
+    WilsonInterval,
+    bonferroni,
+    mcnemar,
+    wilson_ci,
+)
+
+__all__ = [
+    "McNemarResult",
+    "WilsonInterval",
+    "bonferroni",
+    "mcnemar",
+    "wilson_ci",
+]

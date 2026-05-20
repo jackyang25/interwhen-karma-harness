@@ -1,12 +1,15 @@
-"""Custom KARMA model adapter.
+"""KARMA-compatible model adapters.
 
-Subclasses KARMA's BaseModel and registers via @register_model_meta. Wraps a
-vLLM-served Qwen3 reasoning model with:
-- text-mode MCP tool-calling (tool descriptions in system prompt; tool calls
-  parsed from the reasoning trace; results injected back into the stream),
-- the interwhen monitor + semantic verifier,
-- the fact extractor invoked per-vignette.
+For now this package exposes the Sonnet adapter (apparatus validation) and the
+MedAI MCP transport wrapper. The vLLM/Qwen3 adapter is added once the
+apparatus-validation gate is passed.
 
-KARMA invokes the adapter through its standard model interface. All
-verification logic is encapsulated inside; KARMA itself is not modified.
+These adapters do not yet subclass KARMA's BaseModel — that integration is
+deferred until we know the full surface area (verifier, monitors, etc.) so we
+can wrap once instead of refactoring repeatedly. The eval loop in
+harness.runner is KARMA-shaped (dataset → model → scorer) and can be lifted
+into KARMA's CLI later without rewriting the adapters.
 """
+from harness.karma_adapter.sonnet import SonnetAdapter, SonnetResponse
+
+__all__ = ["SonnetAdapter", "SonnetResponse"]

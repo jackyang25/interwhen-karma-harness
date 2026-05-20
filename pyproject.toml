@@ -12,15 +12,13 @@ license = { text = "MIT" }
 authors = [{ name = "Jack Yang" }]
 
 dependencies = [
-    # ── External frameworks ───────────────────────────────────────────────────
-    # KARMA is installed from upstream eka-care. The Bearer token auth gap
-    # (upstream KARMA's MCP client doesn't pass an Authorization header) is
-    # closed by a runtime monkey-patch in harness/_patches.py — no
-    # fork required.
-    # TODO: pin a specific commit SHA before production runs.
-    # "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@<sha>",
-    # TODO: pin interwhen to a specific commit before production runs.
-    # "interwhen @ git+https://github.com/microsoft/interwhen.git@<sha>",
+    # ── External frameworks (pinned commits) ──────────────────────────────────
+    # KARMA: Bearer-auth gap for MCP closed by runtime patch in harness/_patches.py.
+    "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@d3fb194acba00aa014a89d48671b402c4cff8e85",
+    "interwhen @ git+https://github.com/microsoft/interwhen.git@2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e",
+
+    # ── Model APIs ────────────────────────────────────────────────────────────
+    "anthropic>=0.40",
 
     # ── MCP client ────────────────────────────────────────────────────────────
     "fastmcp>=2.0",
