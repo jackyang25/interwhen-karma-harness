@@ -63,10 +63,10 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 # MAGIC counts as activity for the 60-min idle timeout.
 
 # COMMAND ----------
-# max_workers=16 fits comfortably under enterprise Anthropic rate limits and
-# brings the 1,066-row run from ~2-3 hours sequential to ~15-30 minutes. Bump
-# higher if rate-limit headroom allows; drop to 1 to debug sequentially.
-full = run_eval(adapter, n=None, max_workers=16, out_dir="/dbfs/results/apparatus_full/")
+# max_workers=100 — user is on enterprise Anthropic plan with generous limits.
+# Brings the 1,066-row run from ~2-3 hours sequential to ~2-3 minutes.
+# If 429s appear in the output, drop to 32 and re-run. Drop to 1 to debug.
+full = run_eval(adapter, n=None, max_workers=100, out_dir="/dbfs/results/apparatus_full/")
 ci = wilson_ci(full.n_correct, full.n)
 print(f"Full accuracy: {ci}")
 print(f"Target: 81.9% ± 3pp (i.e., 78.9% – 84.9%)")
