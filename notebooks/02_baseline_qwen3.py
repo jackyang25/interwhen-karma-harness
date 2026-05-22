@@ -73,8 +73,14 @@ server = VLLMServer(
     gpu_memory_utilization=0.80,
     max_model_len=16384,
     env_overrides={
-        "VLLM_USE_V1": "0",  # use the more-stable engine on this runtime
+        "VLLM_USE_V1": "0",
         "LD_LIBRARY_PATH": os.environ["LD_LIBRARY_PATH"],
+        # DBR 17.x boots OpenSSL in FIPS mode; vLLM's deps load non-FIPS
+        # OpenSSL bindings → FATAL FIPS SELFTEST FAILURE → SIGABRT (exit -6).
+        # Disabling FIPS for this subprocess is the standard workaround.
+        "OPENSSL_FIPS": "0",
+        "OPENSSL_FORCE_FIPS_MODE": "0",
+        "OPENSSL_CONF": "/dev/null",
     },
 )
 server.start()
