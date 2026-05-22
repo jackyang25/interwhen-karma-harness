@@ -13,7 +13,18 @@
 # MAGIC Pass this entire notebook before running `01_apparatus_validation.py`.
 
 # COMMAND ----------
-# MAGIC %pip install -e /Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness
+# MAGIC %md
+# MAGIC Install external dependencies. The `harness` package itself is on `sys.path`
+# MAGIC automatically because this notebook lives inside the Git Folder — no
+# MAGIC `pip install -e` needed (and editable installs fail on Workspace paths
+# MAGIC because pip can't write build artifacts there).
+
+# COMMAND ----------
+# MAGIC %pip install -q \
+# MAGIC   "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@d3fb194acba00aa014a89d48671b402c4cff8e85" \
+# MAGIC   "interwhen @ git+https://github.com/microsoft/interwhen.git@2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e" \
+# MAGIC   "anthropic>=0.40" "fastmcp>=2.0" "datasets>=2.0" "huggingface-hub" \
+# MAGIC   "pandas" "numpy" "scipy" "statsmodels"
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
