@@ -13,8 +13,6 @@
 
 # COMMAND ----------
 # MAGIC %pip install -q \
-# MAGIC   "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@d3fb194acba00aa014a89d48671b402c4cff8e85" \
-# MAGIC   "interwhen @ git+https://github.com/microsoft/interwhen.git@2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e" \
 # MAGIC   "anthropic>=0.40" "fastmcp>=2.0" "datasets>=2.0" "huggingface-hub" \
 # MAGIC   "pandas" "numpy" "scipy" "statsmodels"
 # MAGIC dbutils.library.restartPython()

@@ -20,9 +20,17 @@
 # MAGIC because pip can't write build artifacts there).
 
 # COMMAND ----------
+# MAGIC %md
+# MAGIC `interwhen` is intentionally omitted here — it has `vllm` as a hard dep
+# MAGIC and won't install cleanly on CPU/Serverless. It gets installed in the
+# MAGIC GPU notebooks (Condition E onward) once we're on an H100.
+# MAGIC
+# MAGIC `karma-medeval` is similarly heavy (pulls torch, transformers); it's
+# MAGIC needed once we plug into KARMA's CLI but not for apparatus validation.
+# MAGIC Skip it here too — the apparatus validation only needs Anthropic + MCP.
+
+# COMMAND ----------
 # MAGIC %pip install -q \
-# MAGIC   "karma-medeval @ git+https://github.com/eka-care/KARMA-OpenMedEvalKit.git@d3fb194acba00aa014a89d48671b402c4cff8e85" \
-# MAGIC   "interwhen @ git+https://github.com/microsoft/interwhen.git@2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e" \
 # MAGIC   "anthropic>=0.40" "fastmcp>=2.0" "datasets>=2.0" "huggingface-hub" \
 # MAGIC   "pandas" "numpy" "scipy" "statsmodels"
 # MAGIC dbutils.library.restartPython()
@@ -46,13 +54,10 @@ except Exception as e:
 # MAGIC %md ### 1. Import packages
 
 # COMMAND ----------
-import karma
-import interwhen
 import harness
 
-print("karma:", karma.__file__)
-print("interwhen:", interwhen.__file__)
 print("harness:", harness.__file__)
+# karma and interwhen are not installed at this stage — see install cell above.
 
 # COMMAND ----------
 # MAGIC %md ### 2. Anthropic API ping
