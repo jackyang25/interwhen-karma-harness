@@ -12,4 +12,14 @@ into KARMA's CLI later without rewriting the adapters.
 """
 from harness.karma_adapter.sonnet import SonnetAdapter, SonnetResponse
 
-__all__ = ["SonnetAdapter", "SonnetResponse"]
+# Qwen3Adapter is imported lazily — it pulls in vllm + transformers which only
+# exist on GPU clusters. Plain `from harness.karma_adapter import Qwen3Adapter`
+# works on a GPU box; it'll raise ImportError on a CPU/Serverless cluster.
+def __getattr__(name: str):
+    if name in {"Qwen3Adapter", "Qwen3Response"}:
+        from harness.karma_adapter import qwen3
+        return getattr(qwen3, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["SonnetAdapter", "SonnetResponse", "Qwen3Adapter", "Qwen3Response"]
