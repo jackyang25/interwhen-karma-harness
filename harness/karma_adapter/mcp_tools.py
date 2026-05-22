@@ -11,11 +11,31 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Awaitable, TypeVar
 
 from fastmcp import Client
 
 MEDAI_MCP_URL = "https://medai-tools.eka.care/mcp"
+
+_T = TypeVar("_T")
+
+
+def _run_async(coro: Awaitable[_T]) -> _T:
+    """Run an awaitable, handling environments that already have a running loop.
+
+    Databricks notebooks run a Tornado event loop in the kernel, so plain
+    asyncio.run() raises. Detect that case and apply nest_asyncio (lazy import
+    so it's not required in non-notebook environments).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Loop is already running — patch it so we can nest.
+    import nest_asyncio  # type: ignore[import-untyped]
+
+    nest_asyncio.apply(loop)
+    return loop.run_until_complete(coro)
 
 
 def fetch_tool_schemas() -> list[dict[str, Any]]:
@@ -29,7 +49,7 @@ def fetch_tool_schemas() -> list[dict[str, Any]]:
         async with Client(MEDAI_MCP_URL) as c:
             return await c.list_tools()
 
-    raw = asyncio.run(_list())
+    raw = _run_async(_list())
     out = []
     for t in raw:
         out.append(
@@ -54,7 +74,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> str:
         async with Client(MEDAI_MCP_URL) as c:
             return await c.call_tool(name, arguments)
 
-    result = asyncio.run(_call())
+    result = _run_async(_call())
     # FastMCP returns a CallToolResult with .content (list of content blocks).
     # Collapse to a single string for tool_result injection.
     if hasattr(result, "content"):

@@ -14,7 +14,7 @@
 # COMMAND ----------
 # MAGIC %pip install -q \
 # MAGIC   "anthropic>=0.40" "fastmcp>=2.0" "datasets>=2.0" "huggingface-hub" \
-# MAGIC   "pandas" "numpy" "scipy" "statsmodels"
+# MAGIC   "pandas" "numpy" "scipy" "statsmodels" "nest-asyncio"
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
