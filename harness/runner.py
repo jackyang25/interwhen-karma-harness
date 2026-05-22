@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -68,66 +69,34 @@ def run_eval(
     system: str | None = DEFAULT_SYSTEM,
     out_dir: str | Path | None = None,
     progress_every: int = 25,
+    max_workers: int = 1,
 ) -> EvalResults:
     """Run an adapter on medical_calculator_eval and return scored results.
 
     n: if set, limit to the first n rows (for pilot runs). None = full set.
+    max_workers: thread pool size. 1 = sequential. Set higher to parallelize
+        across vignettes for the full 1,066-row run. The adapter must be
+        thread-safe at this concurrency (Anthropic client + a fresh MCP
+        connection per call are both fine).
     """
     ds = load_dataset(DATASET_NAME, split=split)
     if n is not None:
         ds = ds.select(range(min(n, len(ds))))
+    total = len(ds)
 
-    rows: list[dict[str, Any]] = []
-    for i, row in enumerate(ds):
-        prompt = f"{row['question_text']}\n\n{row['confinement_instruction']}"
-        try:
-            resp = adapter.run(prompt, system=system)
-            output_text = resp.text
-            n_tool_calls = getattr(resp, "n_tool_calls", 0)
-            stop_reason = getattr(resp, "stop_reason", "n/a")
-            adapter_error = None
-        except Exception as e:
-            output_text = ""
-            n_tool_calls = 0
-            stop_reason = "adapter_error"
-            adapter_error = f"{type(e).__name__}: {e}"
-
-        try:
-            expected = json.loads(row["expected_output"])
-            expected_val = float(expected[row["primary_field"]])
-            expected_ok = True
-        except Exception:
-            expected_val = float("nan")
-            expected_ok = False
-
-        predicted_val, parse_ok = _parse_prediction(output_text, row["primary_field"])
-        tolerance = float(row["tolerance"])
-        if parse_ok and expected_ok:
-            correct = abs(predicted_val - expected_val) <= tolerance
-        else:
-            correct = False
-
-        rows.append(
-            {
-                "id": row.get("id"),
-                "category": row.get("category"),
-                "expected_calculator": row.get("expected_calculator"),
-                "primary_field": row["primary_field"],
-                "tolerance": tolerance,
-                "expected": expected_val,
-                "predicted": predicted_val if parse_ok else None,
-                "correct": correct,
-                "parse_failed": not parse_ok,
-                "n_tool_calls": n_tool_calls,
-                "stop_reason": stop_reason,
-                "adapter_error": adapter_error,
-                "raw_output": output_text,
-            }
+    if max_workers <= 1:
+        results_by_idx = {}
+        for i, row in enumerate(ds):
+            results_by_idx[i] = _score_one(adapter, row, system)
+            if (i + 1) % progress_every == 0:
+                acc = sum(r["correct"] for r in results_by_idx.values()) / len(results_by_idx)
+                print(f"  [{i + 1}/{total}]  acc={acc:.3f}")
+    else:
+        results_by_idx = _run_parallel(
+            adapter, ds, system, max_workers=max_workers, progress_every=progress_every
         )
 
-        if (i + 1) % progress_every == 0:
-            running = sum(r["correct"] for r in rows) / len(rows)
-            print(f"  [{i + 1}/{len(ds)}]  acc={running:.3f}")
+    rows = [results_by_idx[i] for i in range(total)]
 
     df = pd.DataFrame(rows)
     results = EvalResults(
@@ -140,6 +109,74 @@ def run_eval(
     )
     if out_dir is not None:
         results.save(out_dir)
+    return results
+
+
+def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dict[str, Any]:
+    """Run + score a single vignette. Pure function; safe to call from threads."""
+    prompt = f"{row['question_text']}\n\n{row['confinement_instruction']}"
+    try:
+        resp = adapter.run(prompt, system=system)
+        output_text = resp.text
+        n_tool_calls = getattr(resp, "n_tool_calls", 0)
+        stop_reason = getattr(resp, "stop_reason", "n/a")
+        adapter_error = None
+    except Exception as e:
+        output_text = ""
+        n_tool_calls = 0
+        stop_reason = "adapter_error"
+        adapter_error = f"{type(e).__name__}: {e}"
+
+    try:
+        expected = json.loads(row["expected_output"])
+        expected_val = float(expected[row["primary_field"]])
+        expected_ok = True
+    except Exception:
+        expected_val = float("nan")
+        expected_ok = False
+
+    predicted_val, parse_ok = _parse_prediction(output_text, row["primary_field"])
+    tolerance = float(row["tolerance"])
+    correct = bool(parse_ok and expected_ok and abs(predicted_val - expected_val) <= tolerance)
+
+    return {
+        "id": row.get("id"),
+        "category": row.get("category"),
+        "expected_calculator": row.get("expected_calculator"),
+        "primary_field": row["primary_field"],
+        "tolerance": tolerance,
+        "expected": expected_val,
+        "predicted": predicted_val if parse_ok else None,
+        "correct": correct,
+        "parse_failed": not parse_ok,
+        "n_tool_calls": n_tool_calls,
+        "stop_reason": stop_reason,
+        "adapter_error": adapter_error,
+        "raw_output": output_text,
+    }
+
+
+def _run_parallel(
+    adapter: Adapter,
+    ds,
+    system: str | None,
+    max_workers: int,
+    progress_every: int,
+) -> dict[int, dict[str, Any]]:
+    """Dispatch vignettes across a thread pool, preserving dataset order on return."""
+    total = len(ds)
+    results: dict[int, dict[str, Any]] = {}
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_to_idx = {ex.submit(_score_one, adapter, ds[i], system): i for i in range(total)}
+        for fut in as_completed(future_to_idx):
+            i = future_to_idx[fut]
+            results[i] = fut.result()
+            completed += 1
+            if completed % progress_every == 0 or completed == total:
+                acc = sum(r["correct"] for r in results.values()) / completed
+                print(f"  [{completed}/{total}]  acc={acc:.3f}")
     return results
 
 
