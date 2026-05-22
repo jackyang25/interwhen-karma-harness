@@ -75,12 +75,15 @@ server = VLLMServer(
     env_overrides={
         "VLLM_USE_V1": "0",
         "LD_LIBRARY_PATH": os.environ["LD_LIBRARY_PATH"],
-        # DBR 17.x boots OpenSSL in FIPS mode; vLLM's deps load non-FIPS
-        # OpenSSL bindings → FATAL FIPS SELFTEST FAILURE → SIGABRT (exit -6).
-        # Disabling FIPS for this subprocess is the standard workaround.
+        # DBR 17.x ships FIPS-enabled OpenSSL; vLLM's deps bundle a different
+        # OpenSSL build → FIPS self-test mismatch → SIGABRT (exit -6).
+        # OPENSSL_FORCE_FIPS_MODE=0 alone doesn't help because /etc/ssl/openssl.cnf
+        # still enables FIPS at load time. The fix is to skip loading that
+        # config file entirely.
+        "OPENSSL_NO_DEFAULT_CONFIG": "1",
+        "OPENSSL_CONF": "",
         "OPENSSL_FIPS": "0",
         "OPENSSL_FORCE_FIPS_MODE": "0",
-        "OPENSSL_CONF": "/dev/null",
     },
 )
 server.start()
