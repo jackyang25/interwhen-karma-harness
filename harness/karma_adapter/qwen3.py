@@ -1,30 +1,184 @@
-"""Qwen3-30B-A3B-Thinking-2507 adapter with MedAI MCP tool-calling.
+"""Qwen3-30B-A3B-Thinking-2507 adapter via subprocess vLLM server.
 
-vLLM-served, offline (in-process) inference. Tool calls are emitted by the
-model as `<tool_call>{...}</tool_call>` text blocks (Qwen's native format,
-rendered by the chat template). The adapter parses those out, dispatches via
-MCP, and injects results back as `<tool_response>` blocks before regenerating.
+Why subprocess rather than in-process vLLM? On Databricks runtimes newer than
+the open-source ML ecosystem (CUDA 13 / torch 2.11 era), vLLM crashes during
+model load and takes the Python kernel down with it — no traceback, no
+debuggable signal. Running vLLM as a separate process via `vllm serve` gives
+us three things:
 
-This adapter is what Conditions A (no tools) and B (with tools) run on. The
-interwhen-instrumented version for Condition E will subclass this and add
-streaming + mid-generation verifier hooks; that lands later.
+1. **Process isolation**: vLLM crashes don't kill the notebook kernel.
+2. **Real error messages**: stderr is captured to a log file.
+3. **Production-shaped**: `vllm serve` is the recommended deployment pattern,
+   not a workaround.
 
-Threading: the adapter is NOT thread-safe (vLLM's LLM is meant for one
-generation at a time per process). run_eval should use max_workers=1.
+The adapter talks to the local server over the OpenAI-compatible HTTP API.
+Tool calls are parsed from response text (Qwen3 emits `<tool_call>{...}</tool_call>`
+blocks natively), dispatched to MedAI MCP, and injected back as user messages.
+
+Threading: HTTP client is thread-safe; vLLM server batches across concurrent
+requests internally. run_eval can use max_workers > 1.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
+import subprocess
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from harness.karma_adapter.mcp_tools import call_tool, fetch_tool_schemas
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-30B-A3B-Thinking-2507"
 
-# Qwen's tool-call wire format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Subprocess server manager
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class VLLMServer:
+    """Launch and manage a `vllm serve` subprocess.
+
+    Typical lifecycle in a notebook:
+        server = VLLMServer(model_id="Qwen/Qwen3-30B-A3B-Thinking-2507")
+        server.start()
+        server.wait_ready(timeout=600)   # raises with stderr tail if it dies
+        # ... use the server via Qwen3Adapter ...
+        server.stop()                     # at notebook end / kernel detach
+    """
+
+    def __init__(
+        self,
+        model_id: str = QWEN3_MODEL_ID,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        gpu_memory_utilization: float = 0.80,
+        max_model_len: int = 16384,
+        tensor_parallel_size: int = 1,
+        dtype: str = "bfloat16",
+        extra_args: list[str] | None = None,
+        log_path: str | Path = "/tmp/vllm_server.log",
+        env_overrides: dict[str, str] | None = None,
+    ):
+        self.model_id = model_id
+        self.host = host
+        self.port = port
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.max_model_len = max_model_len
+        self.tensor_parallel_size = tensor_parallel_size
+        self.dtype = dtype
+        self.extra_args = extra_args or []
+        self.log_path = Path(log_path)
+        self.env_overrides = env_overrides or {}
+        self.proc: subprocess.Popen | None = None
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}/v1"
+
+    def start(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            raise RuntimeError("Server already running")
+
+        cmd = [
+            "vllm",
+            "serve",
+            self.model_id,
+            "--host",
+            self.host,
+            "--port",
+            str(self.port),
+            "--gpu-memory-utilization",
+            str(self.gpu_memory_utilization),
+            "--max-model-len",
+            str(self.max_model_len),
+            "--tensor-parallel-size",
+            str(self.tensor_parallel_size),
+            "--dtype",
+            self.dtype,
+            "--trust-remote-code",
+            *self.extra_args,
+        ]
+
+        env = os.environ.copy()
+        env.update(self.env_overrides)
+
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = self.log_path.open("w")
+        print(f"Launching: {' '.join(cmd)}")
+        print(f"Logs: {self.log_path}")
+        self.proc = subprocess.Popen(
+            cmd,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,   # so SIGINT to notebook doesn't kill us mid-startup
+        )
+
+    def wait_ready(self, timeout: int = 600, poll_interval: float = 2.0) -> None:
+        """Poll /v1/models until server responds or it dies.
+
+        If the subprocess exits before becoming ready, raise with the tail of
+        the log so we see the real error instead of "kernel unresponsive".
+        """
+        import httpx
+
+        if self.proc is None:
+            raise RuntimeError("Server not started")
+
+        deadline = time.time() + timeout
+        url = f"{self.base_url}/models"
+        while time.time() < deadline:
+            # subprocess died?
+            if self.proc.poll() is not None:
+                tail = self._log_tail(60)
+                raise RuntimeError(
+                    f"vllm serve exited with code {self.proc.returncode} before becoming ready.\n"
+                    f"Last log lines:\n{tail}"
+                )
+            try:
+                r = httpx.get(url, timeout=2.0)
+                if r.status_code == 200:
+                    print(f"Server ready at {self.base_url}")
+                    return
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError):
+                pass
+            time.sleep(poll_interval)
+        raise TimeoutError(f"vllm serve did not become ready within {timeout}s")
+
+    def is_alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def stop(self, timeout: int = 30) -> None:
+        if self.proc is None or self.proc.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+
+    def _log_tail(self, n_lines: int) -> str:
+        try:
+            text = self.log_path.read_text()
+        except FileNotFoundError:
+            return "(no log file written yet)"
+        return "\n".join(text.splitlines()[-n_lines:])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Adapter (HTTP client over the vLLM server)
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -36,71 +190,73 @@ class Qwen3Response:
 
 
 class Qwen3Adapter:
-    """Run a single vignette through Qwen3 with optional MedAI tool access.
+    """Talks to a `vllm serve` instance over OpenAI-compatible HTTP.
 
-    Heavy at construction time: loads the model into GPU memory. Reuse one
-    instance for the whole eval.
+    Tool-call format: Qwen3 emits `<tool_call>{...}</tool_call>` in its
+    assistant content. We parse that out, dispatch via MCP, and append the
+    result as a follow-up user message wrapped in `<tool_response>` tags.
+
+    We do NOT use vLLM's --enable-auto-tool-choice because that requires a
+    tool-call parser that maps to the OpenAI tools API, and Qwen3-Thinking's
+    behavior with auto-tool-choice is less well-tested than the native format.
+    Text-mode parsing is what Qwen3 was trained on.
     """
 
     def __init__(
         self,
+        base_url: str,
         model_id: str = QWEN3_MODEL_ID,
         use_tools: bool = True,
         max_tokens: int = 4096,
         max_tool_turns: int = 10,
         temperature: float = 0.0,
         top_p: float = 1.0,
-        gpu_memory_utilization: float = 0.80,
-        max_model_len: int = 16384,
-        tensor_parallel_size: int = 1,
+        api_key: str = "EMPTY",
     ):
-        # Imported lazily so non-GPU notebooks can import this module without vllm.
-        from vllm import LLM, SamplingParams  # type: ignore[import-untyped]
-        from transformers import AutoTokenizer
+        from openai import OpenAI  # lazy import
 
         self.model_id = model_id
         self.use_tools = use_tools
+        self.max_tokens = max_tokens
         self.max_tool_turns = max_tool_turns
-        self.tools = fetch_tool_schemas() if use_tools else None
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.llm = LLM(
-            model=model_id,
-            tensor_parallel_size=tensor_parallel_size,
-            gpu_memory_utilization=gpu_memory_utilization,
-            max_model_len=max_model_len,
-            dtype="bfloat16",
-            trust_remote_code=True,
-        )
-        self.sampling_params = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            stop=["</tool_call>"],   # stop right after a tool call so we can dispatch
-            include_stop_str_in_output=True,
-        )
-        self._final_sampling_params = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens,
-        )
+        self.temperature = temperature
+        self.top_p = top_p
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+
+        if use_tools:
+            tools = fetch_tool_schemas()
+            self._tool_instructions = _format_tool_instructions(tools)
+        else:
+            self._tool_instructions = ""
 
     def run(self, prompt: str, system: str | None = None) -> Qwen3Response:
+        sys_text = system or ""
+        if self.use_tools and self._tool_instructions:
+            sys_text = (sys_text + "\n\n" + self._tool_instructions).strip()
+
         messages: list[dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        if sys_text:
+            messages.append({"role": "system", "content": sys_text})
         messages.append({"role": "user", "content": prompt})
 
         n_tool_calls = 0
-        for turn in range(self.max_tool_turns + 1):
-            rendered = self.tokenizer.apply_chat_template(
-                messages,
-                tools=self.tools if self.use_tools else None,
-                add_generation_prompt=True,
-                tokenize=False,
+        last_text = ""
+        for _ in range(self.max_tool_turns + 1):
+            stop_strings = ["</tool_call>"] if self.use_tools else None
+            resp = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=messages,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                stop=stop_strings,
             )
-            params = self.sampling_params if self.use_tools else self._final_sampling_params
-            outputs = self.llm.generate([rendered], params, use_tqdm=False)
-            text = outputs[0].outputs[0].text
+            text = resp.choices[0].message.content or ""
+            # vLLM strips the stop string from output by default; re-attach
+            # to keep regex parsing uniform.
+            if stop_strings and resp.choices[0].finish_reason == "stop" and "<tool_call>" in text:
+                text = text + "</tool_call>"
+            last_text = text
 
             tool_match = _TOOL_CALL_RE.search(text) if self.use_tools else None
             if tool_match is None:
@@ -120,23 +276,32 @@ class Qwen3Adapter:
             except Exception as e:
                 result = f"Tool error: {type(e).__name__}: {e}"
             messages.append(
-                {
-                    "role": "tool",
-                    "content": result,
-                }
+                {"role": "user", "content": f"<tool_response>\n{result}\n</tool_response>"}
             )
 
         return Qwen3Response(
-            text=_strip_thinking(text),
+            text=_strip_thinking(last_text),
             n_tool_calls=n_tool_calls,
             raw_messages=messages,
             stop_reason="max_tool_turns",
         )
 
 
-_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+def _format_tool_instructions(tools: list[dict[str, Any]]) -> str:
+    """Render MedAI tool schemas as a Qwen-style tool-use instruction block."""
+    parts = [
+        "You have access to the following tools. To call a tool, write a JSON",
+        "object inside <tool_call>...</tool_call> tags with keys 'name' and",
+        "'arguments'. The tool result will appear as a user message inside",
+        "<tool_response>...</tool_response>. Make at most one tool call per turn.",
+        "",
+        "Available tools:",
+    ]
+    for t in tools:
+        parts.append(f"- {t['name']}: {t.get('description', '').strip()}")
+        parts.append(f"  schema: {json.dumps(t.get('input_schema', {}))}")
+    return "\n".join(parts)
 
 
 def _strip_thinking(text: str) -> str:
-    """Remove Qwen's <think>...</think> reasoning block from the visible answer."""
     return _THINK_RE.sub("", text).strip()
