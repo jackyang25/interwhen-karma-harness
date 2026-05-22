@@ -66,7 +66,14 @@ class VLLMServer:
         extra_args: list[str] | None = None,
         log_path: str | Path = "/tmp/vllm_server.log",
         env_overrides: dict[str, str] | None = None,
+        vllm_bin: str = "vllm",
     ):
+        """
+        vllm_bin: path to the `vllm` executable. Defaults to PATH lookup. Set
+            to /tmp/vllm_env/bin/vllm (or wherever) to run vllm from an isolated
+            venv that doesn't see Databricks's preinstalled TensorFlow / FIPS
+            libs.
+        """
         self.model_id = model_id
         self.host = host
         self.port = port
@@ -77,6 +84,7 @@ class VLLMServer:
         self.extra_args = extra_args or []
         self.log_path = Path(log_path)
         self.env_overrides = env_overrides or {}
+        self.vllm_bin = vllm_bin
         self.proc: subprocess.Popen | None = None
 
     @property
@@ -88,7 +96,7 @@ class VLLMServer:
             raise RuntimeError("Server already running")
 
         cmd = [
-            "vllm",
+            self.vllm_bin,
             "serve",
             self.model_id,
             "--host",

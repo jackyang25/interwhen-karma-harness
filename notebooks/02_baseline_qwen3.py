@@ -3,20 +3,18 @@
 # MAGIC # 02 — Qwen3 baseline (Condition B)
 # MAGIC
 # MAGIC Runs Qwen3-30B-A3B-Thinking-2507 + MedAI tools on `medical_calculator_eval`.
-# MAGIC This is the **baseline** for the actual study. Every other Qwen3 condition
-# MAGIC (A no-tools, C prompt-instruction, D' post-hoc verify, E interwhen) is
-# MAGIC measured against this.
+# MAGIC The reference baseline for the actual study.
 # MAGIC
-# MAGIC **Why subprocess vLLM (not in-process):** on Databricks runtimes newer
-# MAGIC than the open-source ML ecosystem (DBR 17.x has CUDA 13 / torch 2.11),
-# MAGIC in-process vLLM crashes during model load and takes the kernel down. The
-# MAGIC subprocess pattern isolates failures and surfaces real error messages.
+# MAGIC **vLLM is launched as a subprocess** so its crashes show real errors
+# MAGIC instead of taking the notebook kernel down. DBR 17.x's FIPS-enabled
+# MAGIC OpenSSL conflicts with vLLM's bundled deps; this notebook has two
+# MAGIC attempts at working around it (Path A and Path B). Try A first; if it
+# MAGIC dies with the FIPS error, switch to Path B.
 # MAGIC
-# MAGIC **Run cells one at a time, top to bottom. Don't Run All.** Each cell
-# MAGIC has a purpose; you want to see what each one does.
+# MAGIC **Run cells one at a time, top to bottom. Don't Run All.**
 
 # COMMAND ----------
-# MAGIC %md ## 1. Install deps
+# MAGIC %md ## 1. Install deps (system Python — used by Path A)
 
 # COMMAND ----------
 # MAGIC %pip install -q \
@@ -28,7 +26,7 @@
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
-# MAGIC %md ## 2. Paste secrets (locally only — clear before pushing)
+# MAGIC %md ## 2. Paste secrets
 
 # COMMAND ----------
 import os
@@ -36,18 +34,12 @@ import os
 os.environ["EKA_API_TOKEN"] = ""
 
 # COMMAND ----------
-# MAGIC %md ## 3. Pre-flight: GPU visible, libraries findable
+# MAGIC %md ## 3. Pre-flight (GPU + cusparseLt path)
 
 # COMMAND ----------
 # MAGIC %sh nvidia-smi
 # MAGIC echo "---"
-# MAGIC ls /databricks/python3/lib/python3.12/site-packages/cusparselt/lib/ 2>/dev/null || echo "cusparselt path not here — check the find below"
 # MAGIC find /databricks /local_disk0 -name "libcusparseLt.so.0" 2>/dev/null | head -3
-
-# COMMAND ----------
-# MAGIC %md
-# MAGIC Make the CUDA libs findable by vLLM. Setting LD_LIBRARY_PATH here applies
-# MAGIC to subprocesses we launch (like vllm serve) — that's what we need.
 
 # COMMAND ----------
 import os
@@ -57,15 +49,19 @@ os.environ["LD_LIBRARY_PATH"] = CUSPARSELT_DIR + ":" + os.environ.get("LD_LIBRAR
 print("LD_LIBRARY_PATH:", os.environ["LD_LIBRARY_PATH"])
 
 # COMMAND ----------
-# MAGIC %md ## 4. Launch vLLM as a background subprocess
+# MAGIC %md
+# MAGIC # Path A — system Python with TF + OpenSSL bypass
 # MAGIC
-# MAGIC This runs `vllm serve` in its own process. If it crashes, we'll see the
-# MAGIC actual error in `/tmp/vllm_server.log` instead of "kernel unresponsive."
+# MAGIC Try this first. We:
+# MAGIC - Tell vLLM to skip platform auto-detection so it doesn't import TensorFlow
+# MAGIC - Strip TF-related env so anything that does import TF is quiet
+# MAGIC - Tell OpenSSL not to load provider modules (disables FIPS provider entirely)
 # MAGIC
-# MAGIC First load downloads Qwen3-30B weights (~60 GB) — expect 10-15 min.
+# MAGIC If this works → great, no venv needed. If it dies with the same FIPS
+# MAGIC error → skip to Path B below.
 
 # COMMAND ----------
-import harness  # noqa: F401  — also runs _patches for MCP auth
+import harness  # noqa: F401
 from harness.karma_adapter.qwen3 import VLLMServer
 
 server = VLLMServer(
@@ -75,36 +71,76 @@ server = VLLMServer(
     env_overrides={
         "VLLM_USE_V1": "0",
         "LD_LIBRARY_PATH": os.environ["LD_LIBRARY_PATH"],
-        # DBR 17.x ships FIPS-enabled OpenSSL; vLLM's deps bundle a different
-        # OpenSSL build → FIPS self-test mismatch → SIGABRT (exit -6).
-        # OPENSSL_FORCE_FIPS_MODE=0 alone doesn't help because /etc/ssl/openssl.cnf
-        # still enables FIPS at load time. The fix is to skip loading that
-        # config file entirely.
+        # Skip vLLM's platform auto-detection — it imports TF and other
+        # frameworks, which on Databricks ML pulls in FIPS-conflicting libs.
+        "VLLM_PLATFORM": "cuda",
+        # Quiet TF if anything still loads it
+        "TF_CPP_MIN_LOG_LEVEL": "3",
+        # OpenSSL: prevent provider modules (incl. the FIPS provider) from
+        # loading at all. The FIPS self-test failure happens during provider
+        # init; if no provider loads, no self-test runs.
+        "OPENSSL_MODULES": "",
         "OPENSSL_NO_DEFAULT_CONFIG": "1",
         "OPENSSL_CONF": "",
-        "OPENSSL_FIPS": "0",
         "OPENSSL_FORCE_FIPS_MODE": "0",
     },
 )
 server.start()
 
 # COMMAND ----------
-# MAGIC %md
-# MAGIC Wait for the server to come up. If vllm crashes during startup, this
-# MAGIC cell raises with the tail of the log — we finally see the real error.
-
-# COMMAND ----------
-server.wait_ready(timeout=900)   # 15 min ceiling for first-time model download
+server.wait_ready(timeout=900)
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC While we wait, you can tail the log from a separate cell:
-# MAGIC ```
-# MAGIC %sh tail -f /tmp/vllm_server.log
-# MAGIC ```
+# MAGIC If `wait_ready` raised with the FIPS error again, stop here and jump
+# MAGIC down to Path B. If it raised with a DIFFERENT error, paste it — we
+# MAGIC can iterate. If it succeeded, skip Path B and go to section 5.
 
 # COMMAND ----------
-# MAGIC %md ## 5. Smoke-test the server with a tiny request
+# MAGIC %md
+# MAGIC # Path B — isolated venv (only run if Path A failed)
+# MAGIC
+# MAGIC Create a fresh Python virtualenv with just vllm + deps. The venv won't
+# MAGIC have Databricks's preinstalled TensorFlow or other FIPS-conflicting
+# MAGIC libraries, so vLLM's startup doesn't trigger FIPS provider loading.
+
+# COMMAND ----------
+# MAGIC %sh
+# MAGIC set -e
+# MAGIC rm -rf /tmp/vllm_env
+# MAGIC python3 -m venv /tmp/vllm_env
+# MAGIC /tmp/vllm_env/bin/pip install --quiet --upgrade pip
+# MAGIC /tmp/vllm_env/bin/pip install --quiet \
+# MAGIC   vllm==0.9.2 transformers==4.52.4 openai httpx
+# MAGIC ls /tmp/vllm_env/bin/vllm && echo "venv ready"
+
+# COMMAND ----------
+# Stop any zombie server from Path A.
+try:
+    server.stop()
+except NameError:
+    pass
+
+server = VLLMServer(
+    model_id="Qwen/Qwen3-30B-A3B-Thinking-2507",
+    gpu_memory_utilization=0.80,
+    max_model_len=16384,
+    vllm_bin="/tmp/vllm_env/bin/vllm",
+    env_overrides={
+        "VLLM_USE_V1": "0",
+        "LD_LIBRARY_PATH": os.environ["LD_LIBRARY_PATH"],
+        "OPENSSL_MODULES": "",
+        "OPENSSL_NO_DEFAULT_CONFIG": "1",
+        "OPENSSL_CONF": "",
+    },
+)
+server.start()
+
+# COMMAND ----------
+server.wait_ready(timeout=900)
+
+# COMMAND ----------
+# MAGIC %md ## 5. Server smoke test (run after EITHER path succeeds)
 
 # COMMAND ----------
 from openai import OpenAI
@@ -136,9 +172,6 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 
 # COMMAND ----------
 # MAGIC %md ## 7. Full 1,066-row baseline
-# MAGIC
-# MAGIC Only run after the pilot looks healthy (tool calls > 0, parse failures
-# MAGIC low). Expected runtime ~1-2 hours with max_workers=16 against the server.
 
 # COMMAND ----------
 full = run_eval(adapter, n=None, max_workers=16, out_dir="/dbfs/results/qwen3_baseline_full/")
@@ -155,9 +188,6 @@ print(full.rows["n_tool_calls"].describe())
 
 # COMMAND ----------
 # MAGIC %md ## 8. Cleanup
-# MAGIC
-# MAGIC Stop the vLLM subprocess when you're done. Otherwise it keeps holding
-# MAGIC the GPU until the cluster idle-terminates.
 
 # COMMAND ----------
 server.stop()
