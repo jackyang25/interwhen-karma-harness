@@ -18,13 +18,11 @@
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
+# Paste keys locally in Databricks before running. Do NOT commit values back.
 import os
 
-try:
-    os.environ["ANTHROPIC_API_KEY"] = dbutils.secrets.get("apikeys", "anthropic")  # noqa: F821
-    os.environ["EKA_API_TOKEN"] = dbutils.secrets.get("apikeys", "eka")  # noqa: F821
-except Exception:
-    assert "ANTHROPIC_API_KEY" in os.environ and "EKA_API_TOKEN" in os.environ
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["EKA_API_TOKEN"] = ""
 
 # COMMAND ----------
 import harness  # noqa: F401 — applies _patches on import

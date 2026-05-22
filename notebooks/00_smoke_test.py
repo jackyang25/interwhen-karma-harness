@@ -36,19 +36,14 @@
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
+# Paste keys locally in Databricks before running this cell.
+# Do NOT commit this cell with keys filled in — leave the values empty when
+# you push back to git so future pulls don't merge-conflict with your local
+# edits.
 import os
 
-# Pull secrets from Databricks if available, else expect env vars to be set.
-# Replace "apikeys" with whatever scope name you create via:
-#   databricks secrets create-scope apikeys
-try:
-    os.environ["ANTHROPIC_API_KEY"] = dbutils.secrets.get("apikeys", "anthropic")  # noqa: F821
-    os.environ["EKA_API_TOKEN"] = dbutils.secrets.get("apikeys", "eka")  # noqa: F821
-    print("Secrets loaded from Databricks scope 'apikeys'")
-except Exception as e:
-    print(f"Could not load Databricks secrets ({e}). Falling back to os.environ.")
-    assert "ANTHROPIC_API_KEY" in os.environ, "ANTHROPIC_API_KEY missing"
-    assert "EKA_API_TOKEN" in os.environ, "EKA_API_TOKEN missing"
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["EKA_API_TOKEN"] = ""
 
 # COMMAND ----------
 # MAGIC %md ### 1. Import packages
