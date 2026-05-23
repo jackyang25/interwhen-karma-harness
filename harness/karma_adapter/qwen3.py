@@ -2,20 +2,18 @@
 
 Why subprocess rather than in-process vLLM? On Databricks runtimes newer than
 the open-source ML ecosystem (CUDA 13 / torch 2.11 era), vLLM crashes during
-model load and takes the Python kernel down with it — no traceback, no
-debuggable signal. Running vLLM as a separate process via `vllm serve` gives
-us three things:
+model load and takes the Python kernel down with it. Running vLLM as a
+separate process gives us crash isolation and real stderr we can read.
 
-1. **Process isolation**: vLLM crashes don't kill the notebook kernel.
-2. **Real error messages**: stderr is captured to a log file.
-3. **Production-shaped**: `vllm serve` is the recommended deployment pattern,
-   not a workaround.
+**Tool-calling methodology.** We use vLLM's native structured tool API
+(`--enable-auto-tool-choice --tool-call-parser hermes`) and talk to it with
+OpenAI's `tools=[...]` argument. This mirrors how Sonnet got tools (via
+Anthropic's structured Tools API) and matches what each model's native
+tool-use channel looks like — the same comparison structure as EkaCare's
+published table. Hermes-style parsing fits Qwen3, which was trained on this
+format.
 
-The adapter talks to the local server over the OpenAI-compatible HTTP API.
-Tool calls are parsed from response text (Qwen3 emits `<tool_call>{...}</tool_call>`
-blocks natively), dispatched to MedAI MCP, and injected back as user messages.
-
-Threading: HTTP client is thread-safe; vLLM server batches across concurrent
+Threading: the HTTP client is thread-safe; vLLM batches across concurrent
 requests internally. run_eval can use max_workers > 1.
 """
 from __future__ import annotations
@@ -34,7 +32,11 @@ from harness.karma_adapter.mcp_tools import call_tool, fetch_tool_schemas
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-30B-A3B-Thinking-2507"
 
-_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+# Default vLLM args to enable native structured tool-calling. The hermes parser
+# matches Qwen3's training format. `--enable-auto-tool-choice` lets the model
+# choose to invoke tools through the OpenAI tools API channel.
+DEFAULT_VLLM_TOOL_ARGS = ["--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
+
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
@@ -81,7 +83,10 @@ class VLLMServer:
         self.max_model_len = max_model_len
         self.tensor_parallel_size = tensor_parallel_size
         self.dtype = dtype
-        self.extra_args = extra_args or []
+        # Default to enabling structured tool-calling. Pass extra_args=[] to opt out.
+        self.extra_args = (
+            list(DEFAULT_VLLM_TOOL_ARGS) if extra_args is None else list(extra_args)
+        )
         self.log_path = Path(log_path)
         self.env_overrides = env_overrides or {}
         self.vllm_bin = vllm_bin
@@ -200,14 +205,15 @@ class Qwen3Response:
 class Qwen3Adapter:
     """Talks to a `vllm serve` instance over OpenAI-compatible HTTP.
 
-    Tool-call format: Qwen3 emits `<tool_call>{...}</tool_call>` in its
-    assistant content. We parse that out, dispatch via MCP, and append the
-    result as a follow-up user message wrapped in `<tool_response>` tags.
+    Tool-calling uses the OpenAI structured tools API. vLLM is launched with
+    `--enable-auto-tool-choice --tool-call-parser hermes`, which lets Qwen3
+    use its native trained tool-call format while exposing it through the
+    standard OpenAI `tools=[...]` / `tool_calls` interface.
 
-    We do NOT use vLLM's --enable-auto-tool-choice because that requires a
-    tool-call parser that maps to the OpenAI tools API, and Qwen3-Thinking's
-    behavior with auto-tool-choice is less well-tested than the native format.
-    Text-mode parsing is what Qwen3 was trained on.
+    This mirrors how the Sonnet adapter works (Anthropic's structured Tools
+    API): each model gets its native, fine-tuned tool-use channel, so the
+    A/B/C/D'/E comparisons stand on the same methodological footing as
+    EkaCare's published numbers.
     """
 
     def __init__(
@@ -230,62 +236,67 @@ class Qwen3Adapter:
         self.temperature = temperature
         self.top_p = top_p
         self.client = OpenAI(base_url=base_url, api_key=api_key)
-
-        if use_tools:
-            tools = fetch_tool_schemas()
-            self._tool_instructions = _format_tool_instructions(tools)
-        else:
-            self._tool_instructions = ""
+        self.tools = _to_openai_tools(fetch_tool_schemas()) if use_tools else None
 
     def run(self, prompt: str, system: str | None = None) -> Qwen3Response:
-        sys_text = system or ""
-        if self.use_tools and self._tool_instructions:
-            sys_text = (sys_text + "\n\n" + self._tool_instructions).strip()
-
         messages: list[dict[str, Any]] = []
-        if sys_text:
-            messages.append({"role": "system", "content": sys_text})
+        if system:
+            messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
         n_tool_calls = 0
         last_text = ""
         for _ in range(self.max_tool_turns + 1):
-            stop_strings = ["</tool_call>"] if self.use_tools else None
-            resp = self.client.chat.completions.create(
-                model=self.model_id,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                stop=stop_strings,
-            )
-            text = resp.choices[0].message.content or ""
-            # vLLM strips the stop string from output by default; re-attach
-            # to keep regex parsing uniform.
-            if stop_strings and resp.choices[0].finish_reason == "stop" and "<tool_call>" in text:
-                text = text + "</tool_call>"
+            kwargs: dict[str, Any] = {
+                "model": self.model_id,
+                "messages": messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+            }
+            if self.tools:
+                kwargs["tools"] = self.tools
+                kwargs["tool_choice"] = "auto"
+
+            resp = self.client.chat.completions.create(**kwargs)
+            choice = resp.choices[0]
+            msg = choice.message
+            text = msg.content or ""
             last_text = text
 
-            tool_match = _TOOL_CALL_RE.search(text) if self.use_tools else None
-            if tool_match is None:
-                messages.append({"role": "assistant", "content": text})
+            tool_calls = msg.tool_calls or []
+            # Append the assistant message — include tool_calls if present so
+            # the model can refer back to its own request.
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": text}
+            if tool_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ]
+            messages.append(assistant_msg)
+
+            if not tool_calls:
                 return Qwen3Response(
                     text=_strip_thinking(text),
                     n_tool_calls=n_tool_calls,
                     raw_messages=messages,
-                    stop_reason="stop",
+                    stop_reason=choice.finish_reason or "stop",
                 )
 
-            n_tool_calls += 1
-            messages.append({"role": "assistant", "content": text})
-            try:
-                call = json.loads(tool_match.group(1))
-                result = call_tool(call["name"], call.get("arguments", {}))
-            except Exception as e:
-                result = f"Tool error: {type(e).__name__}: {e}"
-            messages.append(
-                {"role": "user", "content": f"<tool_response>\n{result}\n</tool_response>"}
-            )
+            for tc in tool_calls:
+                n_tool_calls += 1
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                    result = call_tool(tc.function.name, args)
+                except Exception as e:
+                    result = f"Tool error: {type(e).__name__}: {e}"
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.id, "content": result}
+                )
 
         return Qwen3Response(
             text=_strip_thinking(last_text),
@@ -295,20 +306,27 @@ class Qwen3Adapter:
         )
 
 
-def _format_tool_instructions(tools: list[dict[str, Any]]) -> str:
-    """Render MedAI tool schemas as a Qwen-style tool-use instruction block."""
-    parts = [
-        "You have access to the following tools. To call a tool, write a JSON",
-        "object inside <tool_call>...</tool_call> tags with keys 'name' and",
-        "'arguments'. The tool result will appear as a user message inside",
-        "<tool_response>...</tool_response>. Make at most one tool call per turn.",
-        "",
-        "Available tools:",
-    ]
+def _to_openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Anthropic-style MCP tool schemas to OpenAI tools format.
+
+    fetch_tool_schemas() returns dicts shaped as
+        {"name": ..., "description": ..., "input_schema": {...}}
+    OpenAI's chat completions API expects
+        {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
+    """
+    out = []
     for t in tools:
-        parts.append(f"- {t['name']}: {t.get('description', '').strip()}")
-        parts.append(f"  schema: {json.dumps(t.get('input_schema', {}))}")
-    return "\n".join(parts)
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", "") or "",
+                    "parameters": t.get("input_schema", {}) or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return out
 
 
 def _strip_thinking(text: str) -> str:

@@ -62,7 +62,9 @@ EkaCare's open-source medical AI evaluation framework. Provides dataset loading,
 
 **Integration approach:** a custom KARMA model adapter wraps the vLLM-served Qwen3 model with interwhen monitors and the semantic verifier. KARMA sees the adapter through its standard model interface; verification logic is encapsulated inside.
 
-**Tool-calling mechanism.** The adapter places MedAI tool descriptions in the system prompt and Qwen3 emits tool calls as text in its reasoning trace (e.g., `<tool_call>{...}</tool_call>`), not via OpenAI-style structured function-calling. This makes each tool call a detectable step in the visible stream so interwhen's `step_extractor` can fire verification at the commit boundary — matching the framework's published step definitions (a move in Maze, an op in Game24, a code block in Verina). Structured function-calling places the tool call outside the visible stream and would leave the verifier acting on reasoning *about* the call rather than the call itself.
+**Tool-calling mechanism.** Each model uses its **native structured tool channel** — the same level of fine-tuned support EkaCare's published table gave to its closed-API entries. Sonnet (apparatus validation) gets Anthropic's Tools API. Qwen3 gets the OpenAI-compatible tool API exposed by `vllm serve --enable-auto-tool-choice --tool-call-parser hermes`, which routes tool calls through Qwen3's trained Hermes-style format. Matching channels keeps the A/B/C/D'/E comparisons on the same methodological footing as the published baseline.
+
+**Where this leaves Condition E.** The verifier still has a clean commit boundary to act on: each `tool_calls` block in the assistant message is a discrete, well-typed object the monitor can inspect before the call is dispatched to MedAI MCP. The interwhen monitor subclass (built in a later phase) parses the structured `tool_calls` field rather than scanning free-form reasoning text — slightly cleaner integration than the original text-mode plan, and equivalent for the verification logic.
 
 ### 4.3 MedAI MCP Tools
 

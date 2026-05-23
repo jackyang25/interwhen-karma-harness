@@ -179,7 +179,10 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 
 # COMMAND ----------
 
-full = run_eval(adapter, n=None, max_workers=16, out_dir="/dbfs/results/qwen3_baseline_full/")
+# 64 workers: matches what a single H100 with Qwen3-30B-A3B-Thinking can
+# realistically batch via vLLM's continuous-batching scheduler. Higher just
+# queues HTTP requests without GPU speedup; lower under-utilizes the GPU.
+full = run_eval(adapter, n=None, max_workers=64, out_dir="/dbfs/results/qwen3_baseline_full/")
 ci = wilson_ci(full.n_correct, full.n)
 print(f"Baseline (Condition B) accuracy: {ci}")
 
