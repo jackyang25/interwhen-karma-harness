@@ -31,7 +31,7 @@
 # MAGIC   "fastmcp-slim[client]>=2.0" "datasets>=2.0" "huggingface-hub" \
 # MAGIC   "pandas" "numpy" "scipy" "statsmodels" "nest-asyncio" \
 # MAGIC   "nvidia-cusparselt-cu12" \
-# MAGIC   "pydantic>=2.0" "regex" "tiktoken"
+# MAGIC   "pydantic>=2.0" "regex" "tiktoken" "z3-solver" "sympy"
 # MAGIC %pip install -q --no-deps \
 # MAGIC   "interwhen @ git+https://github.com/microsoft/interwhen.git@2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e"
 # MAGIC dbutils.library.restartPython()
