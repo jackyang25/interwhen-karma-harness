@@ -1,59 +1,236 @@
-"""Qwen3-30B-A3B-Thinking-2507 adapter via subprocess vLLM server.
+"""Qwen3-30B-A3B-Thinking-2507 adapter (text-mode via vLLM /v1/completions).
 
-Why subprocess rather than in-process vLLM? On Databricks runtimes newer than
-the open-source ML ecosystem (CUDA 13 / torch 2.11 era), vLLM crashes during
-model load and takes the Python kernel down with it. Running vLLM as a
-separate process gives us crash isolation and real stderr we can read.
+Why text-mode (and not chat-completions + structured tools)? Two reasons:
 
-**Tool-calling methodology.** We use vLLM's native structured tool API
-(`--enable-auto-tool-choice --tool-call-parser hermes`) and talk to it with
-OpenAI's `tools=[...]` argument. This mirrors how Sonnet got tools (via
-Anthropic's structured Tools API) and matches what each model's native
-tool-use channel looks like — the same comparison structure as EkaCare's
-published table. Hermes-style parsing fits Qwen3, which was trained on this
-format.
+1. **interwhen compatibility.** interwhen's `stream_completion` drives the raw
+   text endpoint (`/v1/completions`) and watches the streamed text for step
+   boundaries. Condition E needs this pattern; using a different endpoint
+   for E than for A/B/C/D'/B' would mix channels and confound comparisons.
 
-Threading: the HTTP client is thread-safe; vLLM batches across concurrent
-requests internally. run_eval can use max_workers > 1.
+2. **Qwen3's native trained channel.** Qwen3 was fine-tuned to emit
+   `<tool_call>{...}</tool_call>` tags as raw text. The structured tools API
+   we used earlier was just vLLM post-processing those same tags. Same model
+   behavior, different parsing layer. Text-mode exposes the raw stream
+   directly, which is what we want.
+
+Architecture:
+- `apply_chat_template(messages, tools=...)` from the HF tokenizer builds the
+  prompt in Qwen3's native format (no need to hand-write the chatml).
+- Call `/v1/completions` (text endpoint), stop at `</tool_call>` so we can
+  dispatch immediately.
+- Parse the tool call, dispatch to MedAI MCP, append result as a
+  `<tool_response>` block to the prompt, and continue generation from there.
+- Loop until the model produces output without a tool call.
+
+This file replaces the earlier chat-completions adapter. Class name and
+public API (`Qwen3Adapter.run`, `Qwen3Response`) are preserved so notebooks
+do not need to change their imports.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
-import signal
-import subprocess
-import time
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any
 
 from harness.karma_adapter.mcp_tools import call_tool, fetch_tool_schemas
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-30B-A3B-Thinking-2507"
 
-# Default vLLM args to enable native structured tool-calling. The hermes parser
-# matches Qwen3's training format. `--enable-auto-tool-choice` lets the model
-# choose to invoke tools through the OpenAI tools API channel.
-DEFAULT_VLLM_TOOL_ARGS = ["--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
-
+_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
+@dataclass
+class Qwen3Response:
+    text: str
+    n_tool_calls: int
+    raw_prompt: str
+    raw_completion: str
+    stop_reason: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    n_model_calls: int = 0
+    # Field kept for compatibility with the old chat-completions adapter shape;
+    # text-mode stores the full raw text in `raw_completion`, so this is
+    # populated as a single-element list referring to the rolling prompt.
+    raw_messages: list[dict[str, Any]] = field(default_factory=list)
+
+
+class Qwen3Adapter:
+    """Talks to vLLM's /v1/completions endpoint in text mode.
+
+    Tool descriptions are inlined in the prompt via the tokenizer's
+    `apply_chat_template(..., tools=...)`. The model is expected to emit
+    `<tool_call>{...}</tool_call>` tags in the output stream; the adapter
+    detects them, dispatches via MedAI MCP, and appends a `<tool_response>`
+    block before continuing.
+
+    Threading: thread-safe at this granularity (httpx-backed OpenAI client,
+    one MCP call per tool dispatch). run_eval can use max_workers > 1.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        model_id: str = QWEN3_MODEL_ID,
+        use_tools: bool = True,
+        max_tokens: int = 4096,
+        max_tool_turns: int = 10,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        api_key: str = "EMPTY",
+        tokenizer_id: str | None = None,
+    ):
+        from openai import OpenAI  # lazy import
+        from transformers import AutoTokenizer
+
+        self.model_id = model_id
+        self.use_tools = use_tools
+        self.max_tokens = max_tokens
+        self.max_tool_turns = max_tool_turns
+        self.temperature = temperature
+        self.top_p = top_p
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
+
+        # The tokenizer builds the chatml-format prompt that Qwen3 was trained
+        # on. We bypass /v1/chat/completions and hit /v1/completions with the
+        # rendered string directly so we own the raw text stream interwhen
+        # needs to monitor.
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id or model_id)
+        self._tools_schema: list[dict[str, Any]] | None = (
+            fetch_tool_schemas() if use_tools else None
+        )
+
+    def run(self, prompt: str, system: str | None = None) -> Qwen3Response:
+        messages: list[dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        rendered = self.tokenizer.apply_chat_template(
+            messages,
+            tools=self._tools_schema if self.use_tools else None,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+
+        n_tool_calls = 0
+        n_model_calls = 0
+        prompt_tokens = 0
+        completion_tokens = 0
+        rolling_prompt = rendered
+
+        for _ in range(self.max_tool_turns + 1):
+            # /v1/completions — raw text in, raw text out.
+            resp = self.client.completions.create(
+                model=self.model_id,
+                prompt=rolling_prompt,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                stop=(["</tool_call>"] if self.use_tools else None),
+            )
+            n_model_calls += 1
+            if resp.usage is not None:
+                prompt_tokens += getattr(resp.usage, "prompt_tokens", 0) or 0
+                completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
+
+            choice = resp.choices[0]
+            generated = choice.text or ""
+
+            # If the model hit the stop string, vLLM strips it. Re-attach so the
+            # regex match below sees a complete <tool_call>...</tool_call>.
+            tool_call_open = "<tool_call>" in generated
+            stopped_at_tool = (
+                self.use_tools
+                and choice.finish_reason == "stop"
+                and tool_call_open
+            )
+            if stopped_at_tool:
+                generated = generated + "</tool_call>"
+
+            rolling_prompt += generated
+
+            if not self.use_tools or not tool_call_open:
+                return Qwen3Response(
+                    text=_strip_thinking(_extract_assistant_tail(generated)),
+                    n_tool_calls=n_tool_calls,
+                    raw_prompt=rendered,
+                    raw_completion=rolling_prompt[len(rendered):],
+                    stop_reason=choice.finish_reason or "stop",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    n_model_calls=n_model_calls,
+                )
+
+            tool_match = _TOOL_CALL_RE.search(generated)
+            if tool_match is None:
+                # Model said "<tool_call>" but never closed it. Treat as final answer.
+                return Qwen3Response(
+                    text=_strip_thinking(_extract_assistant_tail(generated)),
+                    n_tool_calls=n_tool_calls,
+                    raw_prompt=rendered,
+                    raw_completion=rolling_prompt[len(rendered):],
+                    stop_reason="malformed_tool_call",
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    n_model_calls=n_model_calls,
+                )
+
+            n_tool_calls += 1
+            try:
+                call = json.loads(tool_match.group(1))
+                result = call_tool(call["name"], call.get("arguments", {}))
+            except Exception as e:
+                result = f"Tool error: {type(e).__name__}: {e}"
+
+            # Close the current assistant turn (the model emitted <tool_call>
+            # then stopped at </tool_call>, so the turn is still open with no
+            # <|im_end|>), then add a tool turn with the response, then re-open
+            # the assistant turn for continuation. This matches Qwen3's
+            # training-time tool-use format.
+            rolling_prompt += (
+                "<|im_end|>\n"
+                "<|im_start|>tool\n"
+                f"<tool_response>\n{result}\n</tool_response>\n"
+                "<|im_end|>\n"
+                "<|im_start|>assistant\n"
+            )
+
+        # Max tool turns exhausted.
+        return Qwen3Response(
+            text=_strip_thinking(_extract_assistant_tail(rolling_prompt[len(rendered):])),
+            n_tool_calls=n_tool_calls,
+            raw_prompt=rendered,
+            raw_completion=rolling_prompt[len(rendered):],
+            stop_reason="max_tool_turns",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            n_model_calls=n_model_calls,
+        )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Subprocess server manager
+# vLLM server manager (unchanged from prior text-mode design; preserved here so
+# notebooks that import VLLMServer don't break).
 # ──────────────────────────────────────────────────────────────────────────────
+
+import os
+import signal
+import subprocess
+import time
+from pathlib import Path
 
 
 class VLLMServer:
     """Launch and manage a `vllm serve` subprocess.
 
-    Typical lifecycle in a notebook:
-        server = VLLMServer(model_id="Qwen/Qwen3-30B-A3B-Thinking-2507")
-        server.start()
-        server.wait_ready(timeout=600)   # raises with stderr tail if it dies
-        # ... use the server via Qwen3Adapter ...
-        server.stop()                     # at notebook end / kernel detach
+    Exposes /v1/completions and /v1/chat/completions endpoints. We use the
+    former for all Qwen3 work. The default launch args intentionally do NOT
+    include `--enable-auto-tool-choice` or `--tool-call-parser`; those flags
+    only affect /v1/chat/completions and would be no-ops on our text-mode
+    path.
     """
 
     def __init__(
@@ -70,12 +247,6 @@ class VLLMServer:
         env_overrides: dict[str, str] | None = None,
         vllm_bin: str = "vllm",
     ):
-        """
-        vllm_bin: path to the `vllm` executable. Defaults to PATH lookup. Set
-            to /tmp/vllm_env/bin/vllm (or wherever) to run vllm from an isolated
-            venv that doesn't see Databricks's preinstalled TensorFlow / FIPS
-            libs.
-        """
         self.model_id = model_id
         self.host = host
         self.port = port
@@ -83,10 +254,7 @@ class VLLMServer:
         self.max_model_len = max_model_len
         self.tensor_parallel_size = tensor_parallel_size
         self.dtype = dtype
-        # Default to enabling structured tool-calling. Pass extra_args=[] to opt out.
-        self.extra_args = (
-            list(DEFAULT_VLLM_TOOL_ARGS) if extra_args is None else list(extra_args)
-        )
+        self.extra_args = list(extra_args or [])
         self.log_path = Path(log_path)
         self.env_overrides = env_overrides or {}
         self.vllm_bin = vllm_bin
@@ -101,21 +269,13 @@ class VLLMServer:
             raise RuntimeError("Server already running")
 
         cmd = [
-            self.vllm_bin,
-            "serve",
-            self.model_id,
-            "--host",
-            self.host,
-            "--port",
-            str(self.port),
-            "--gpu-memory-utilization",
-            str(self.gpu_memory_utilization),
-            "--max-model-len",
-            str(self.max_model_len),
-            "--tensor-parallel-size",
-            str(self.tensor_parallel_size),
-            "--dtype",
-            self.dtype,
+            self.vllm_bin, "serve", self.model_id,
+            "--host", self.host,
+            "--port", str(self.port),
+            "--gpu-memory-utilization", str(self.gpu_memory_utilization),
+            "--max-model-len", str(self.max_model_len),
+            "--tensor-parallel-size", str(self.tensor_parallel_size),
+            "--dtype", self.dtype,
             "--trust-remote-code",
             *self.extra_args,
         ]
@@ -128,28 +288,17 @@ class VLLMServer:
         print(f"Launching: {' '.join(cmd)}")
         print(f"Logs: {self.log_path}")
         self.proc = subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,   # so SIGINT to notebook doesn't kill us mid-startup
+            cmd, stdout=log_fh, stderr=subprocess.STDOUT, env=env, start_new_session=True,
         )
 
     def wait_ready(self, timeout: int = 600, poll_interval: float = 2.0) -> None:
-        """Poll /v1/models until server responds or it dies.
-
-        If the subprocess exits before becoming ready, raise with the tail of
-        the log so we see the real error instead of "kernel unresponsive".
-        """
         import httpx
 
         if self.proc is None:
             raise RuntimeError("Server not started")
-
         deadline = time.time() + timeout
         url = f"{self.base_url}/models"
         while time.time() < deadline:
-            # subprocess died?
             if self.proc.poll() is not None:
                 tail = self._log_tail(60)
                 raise RuntimeError(
@@ -190,144 +339,25 @@ class VLLMServer:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Adapter (HTTP client over the vLLM server)
+# Helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Qwen3Response:
-    text: str
-    n_tool_calls: int
-    raw_messages: list[dict[str, Any]]
-    stop_reason: str
-
-
-class Qwen3Adapter:
-    """Talks to a `vllm serve` instance over OpenAI-compatible HTTP.
-
-    Tool-calling uses the OpenAI structured tools API. vLLM is launched with
-    `--enable-auto-tool-choice --tool-call-parser hermes`, which lets Qwen3
-    use its native trained tool-call format while exposing it through the
-    standard OpenAI `tools=[...]` / `tool_calls` interface.
-
-    This mirrors how the Sonnet adapter works (Anthropic's structured Tools
-    API): each model gets its native, fine-tuned tool-use channel, so the
-    A/B/C/D'/E comparisons stand on the same methodological footing as
-    EkaCare's published numbers.
-    """
-
-    def __init__(
-        self,
-        base_url: str,
-        model_id: str = QWEN3_MODEL_ID,
-        use_tools: bool = True,
-        max_tokens: int = 4096,
-        max_tool_turns: int = 10,
-        temperature: float = 0.0,
-        top_p: float = 1.0,
-        api_key: str = "EMPTY",
-    ):
-        from openai import OpenAI  # lazy import
-
-        self.model_id = model_id
-        self.use_tools = use_tools
-        self.max_tokens = max_tokens
-        self.max_tool_turns = max_tool_turns
-        self.temperature = temperature
-        self.top_p = top_p
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
-        self.tools = _to_openai_tools(fetch_tool_schemas()) if use_tools else None
-
-    def run(self, prompt: str, system: str | None = None) -> Qwen3Response:
-        messages: list[dict[str, Any]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        n_tool_calls = 0
-        last_text = ""
-        for _ in range(self.max_tool_turns + 1):
-            kwargs: dict[str, Any] = {
-                "model": self.model_id,
-                "messages": messages,
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-            }
-            if self.tools:
-                kwargs["tools"] = self.tools
-                kwargs["tool_choice"] = "auto"
-
-            resp = self.client.chat.completions.create(**kwargs)
-            choice = resp.choices[0]
-            msg = choice.message
-            text = msg.content or ""
-            last_text = text
-
-            tool_calls = msg.tool_calls or []
-            # Append the assistant message — include tool_calls if present so
-            # the model can refer back to its own request.
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": text}
-            if tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in tool_calls
-                ]
-            messages.append(assistant_msg)
-
-            if not tool_calls:
-                return Qwen3Response(
-                    text=_strip_thinking(text),
-                    n_tool_calls=n_tool_calls,
-                    raw_messages=messages,
-                    stop_reason=choice.finish_reason or "stop",
-                )
-
-            for tc in tool_calls:
-                n_tool_calls += 1
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                    result = call_tool(tc.function.name, args)
-                except Exception as e:
-                    result = f"Tool error: {type(e).__name__}: {e}"
-                messages.append(
-                    {"role": "tool", "tool_call_id": tc.id, "content": result}
-                )
-
-        return Qwen3Response(
-            text=_strip_thinking(last_text),
-            n_tool_calls=n_tool_calls,
-            raw_messages=messages,
-            stop_reason="max_tool_turns",
-        )
-
-
-def _to_openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert Anthropic-style MCP tool schemas to OpenAI tools format.
-
-    fetch_tool_schemas() returns dicts shaped as
-        {"name": ..., "description": ..., "input_schema": {...}}
-    OpenAI's chat completions API expects
-        {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
-    """
-    out = []
-    for t in tools:
-        out.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t.get("description", "") or "",
-                    "parameters": t.get("input_schema", {}) or {"type": "object", "properties": {}},
-                },
-            }
-        )
-    return out
 
 
 def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
+
+
+def _extract_assistant_tail(text: str) -> str:
+    """Pull the model's final visible answer out of a chatml-style completion.
+
+    Qwen3's chat template uses `<|im_start|>assistant ... <|im_end|>` markers.
+    For the final-answer return we want the assistant's most recent content,
+    after any tool_call/tool_response cycles and after thinking.
+    """
+    # Strip the chatml turn markers — keep the content of the last assistant
+    # turn or, if those markers aren't present, the whole tail.
+    last = text
+    if "<|im_start|>assistant" in text:
+        last = text.rsplit("<|im_start|>assistant", 1)[-1]
+    last = last.split("<|im_end|>", 1)[0]
+    return last.strip()

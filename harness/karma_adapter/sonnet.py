@@ -24,6 +24,9 @@ class SonnetResponse:
     n_tool_calls: int
     raw_messages: list[dict[str, Any]]
     stop_reason: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    n_model_calls: int = 0
 
 
 class SonnetAdapter:
@@ -61,6 +64,9 @@ class SonnetAdapter:
             # via the tools=[...] argument.
             sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
 
+        prompt_tokens = 0
+        completion_tokens = 0
+        n_model_calls = 0
         for _ in range(self.max_tool_turns + 1):
             kwargs: dict[str, Any] = {
                 "model": self.model,
@@ -74,6 +80,13 @@ class SonnetAdapter:
                 kwargs["tools"] = self.tools
 
             resp = self.client.messages.create(**kwargs)
+            n_model_calls += 1
+            if getattr(resp, "usage", None) is not None:
+                # Anthropic uses input_tokens / output_tokens (with cache fields).
+                # Normalize to prompt_tokens / completion_tokens for cross-adapter parity.
+                prompt_tokens += getattr(resp.usage, "input_tokens", 0) or 0
+                prompt_tokens += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+                completion_tokens += getattr(resp.usage, "output_tokens", 0) or 0
             messages.append({"role": "assistant", "content": resp.content})
 
             if resp.stop_reason != "tool_use":
@@ -83,6 +96,9 @@ class SonnetAdapter:
                     n_tool_calls=n_tool_calls,
                     raw_messages=messages,
                     stop_reason=resp.stop_reason,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    n_model_calls=n_model_calls,
                 )
 
             tool_results = []
@@ -115,6 +131,9 @@ class SonnetAdapter:
             n_tool_calls=n_tool_calls,
             raw_messages=messages,
             stop_reason="max_tool_turns",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            n_model_calls=n_model_calls,
         )
 
 

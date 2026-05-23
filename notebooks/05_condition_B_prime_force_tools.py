@@ -1,16 +1,16 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 02 — Qwen3 Condition B (with tools)
+# MAGIC # 05 — Qwen3 Condition B' (force tool use, secondary)
 # MAGIC
-# MAGIC Runs Qwen3-30B-A3B-Thinking-2507 + MedAI tools on `medical_calculator_eval`.
-# MAGIC The reference condition for the study — every other Qwen3 condition
-# MAGIC (A no-tools, C prompt-instruction, D' post-hoc, E interwhen) is
-# MAGIC compared against this.
+# MAGIC Runs Qwen3-30B-A3B-Thinking-2507 + MedAI tools on
+# MAGIC `medical_calculator_eval` with a **prompt-level intervention forcing
+# MAGIC tool use** for every computation. This is the secondary exploratory
+# MAGIC condition added after observing Qwen3's tool underuse in Condition B
+# MAGIC (median 0 calls/vignette). Locked prompt at `conf/prompts/condition_b_prime.txt`.
 # MAGIC
-# MAGIC **vLLM is launched as a subprocess** in an isolated venv so its crashes
-# MAGIC show real errors instead of taking the notebook kernel down. The venv
-# MAGIC also avoids the FIPS-enabled OpenSSL bundled with opencv on DBR 17.x
-# MAGIC Azure images.
+# MAGIC B' vs B answers a distinct question from the primary track: does forcing
+# MAGIC tool use close the open-weights tool-access gap? Reported as exploratory,
+# MAGIC uncorrected α = 0.05 (not in Bonferroni family). See TESTING.md §3, §6.
 # MAGIC
 # MAGIC **Run All should work top-to-bottom.**
 
@@ -61,11 +61,7 @@ print("LD_LIBRARY_PATH:", os.environ["LD_LIBRARY_PATH"])
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## 4. Create vLLM venv & launch server
-# MAGIC
-# MAGIC Builds a fresh virtualenv, removes opencv (which bundles FIPS-enabled OpenSSL
-# MAGIC 1.1.1k that aborts vLLM), then launches `vllm serve` as a subprocess.
+# MAGIC %md ## 4. Create vLLM venv & launch server
 
 # COMMAND ----------
 
@@ -82,7 +78,6 @@ print("LD_LIBRARY_PATH:", os.environ["LD_LIBRARY_PATH"])
 
 # COMMAND ----------
 
-# Stop any zombie server from a previous run.
 try:
     server.stop()
 except NameError:
@@ -90,7 +85,6 @@ except NameError:
 
 import os, subprocess, textwrap, pathlib
 
-# --- Write a minimal openssl.cnf that loads ONLY the default provider ---
 _ossl_conf = pathlib.Path("/tmp/openssl_nofips.cnf")
 _ossl_conf.write_text(textwrap.dedent("""\
     openssl_conf = openssl_init
@@ -105,10 +99,6 @@ _ossl_conf.write_text(textwrap.dedent("""\
     activate = 1
 """))
 
-# --- Uninstall opencv-python-headless from the venv ---
-# opencv bundles a FIPS-enabled OpenSSL 1.1.1k that triggers the FIPS self-test
-# failure. vLLM doesn't need cv2 for text inference. Removing the package avoids
-# both the FIPS abort and any missing-library errors.
 subprocess.run(
     ["/tmp/vllm_env/bin/pip", "uninstall", "-y", "opencv-python-headless"],
     capture_output=True, timeout=60,
@@ -116,9 +106,6 @@ subprocess.run(
 print("opencv-python-headless removed from venv")
 
 os.environ.pop("_PIP_USE_IMPORTLIB_METADATA", None)
-
-# Change cwd to /tmp so vLLM's stat() on relative model paths doesn't hit
-# Databricks's restricted working directory.
 os.chdir("/tmp")
 
 from harness.karma_adapter.qwen3 import VLLMServer
@@ -160,7 +147,26 @@ print("Server OK:", r.choices[0].message.content)
 
 # COMMAND ----------
 
-# MAGIC %md ## 6. Pilot — 10 vignettes with tools
+# MAGIC %md ## 6. Load locked Condition B' prompt
+
+# COMMAND ----------
+
+import pathlib
+
+_repo_root = pathlib.Path("/Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness")
+CONDITION_B_PRIME_SYSTEM = (_repo_root / "conf/prompts/condition_b_prime.txt").read_text().strip()
+print("Loaded Condition B' prompt:")
+print("-" * 60)
+print(CONDITION_B_PRIME_SYSTEM)
+print("-" * 60)
+
+# COMMAND ----------
+
+# MAGIC %md ## 7. Pilot — 10 vignettes with force-tool-use prompt
+# MAGIC
+# MAGIC Sanity check: tool calls per vignette should be substantially higher
+# MAGIC than B's 0.38 baseline. If it isn't, the prompt isn't getting through
+# MAGIC and B' isn't measuring what we want it to measure.
 
 # COMMAND ----------
 
@@ -169,10 +175,16 @@ from harness.runner import run_eval
 from harness.analysis import wilson_ci
 
 adapter = Qwen3Adapter(base_url=server.base_url, use_tools=True)
-pilot = run_eval(adapter, n=10, max_workers=4, out_dir="/dbfs/results/qwen3_condition_B_pilot/")
+pilot = run_eval(
+    adapter,
+    n=10,
+    max_workers=4,
+    system=CONDITION_B_PRIME_SYSTEM,
+    out_dir="/dbfs/results/qwen3_condition_B_prime_pilot/",
+)
 print(f"Pilot accuracy: {pilot.accuracy:.1%} ({pilot.n_correct}/{pilot.n})")
 print(f"Parse failures: {pilot.n_parse_failures}")
-print(f"Tool calls per vignette (mean): {pilot.rows['n_tool_calls'].mean():.1f}")
+print(f"Tool calls per vignette (mean): {pilot.rows['n_tool_calls'].mean():.1f}  (B baseline: 0.38; should be HIGHER for B')")
 
 # COMMAND ----------
 
@@ -180,29 +192,38 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Full 1,066-row Condition B
+# MAGIC %md ## 8. Full 1,066-row Condition B'
 
 # COMMAND ----------
 
-# 64 workers: matches what a single H100 with Qwen3-30B-A3B-Thinking can
-# realistically batch via vLLM's continuous-batching scheduler. Higher just
-# queues HTTP requests without GPU speedup; lower under-utilizes the GPU.
-full = run_eval(adapter, n=None, max_workers=64, out_dir="/dbfs/results/qwen3_condition_B_full/")
+full = run_eval(
+    adapter,
+    n=None,
+    max_workers=64,
+    system=CONDITION_B_PRIME_SYSTEM,
+    out_dir="/dbfs/results/qwen3_condition_B_prime_full/",
+)
 ci = wilson_ci(full.n_correct, full.n)
-print(f"Condition B (with tools) accuracy: {ci}")
+print(f"Condition B' (force tool use) accuracy: {ci}")
+print()
+print("--- Cost / time (LMIC deployment proxies) ---")
+print(f"Total wall-clock for full run: {full.total_run_seconds/60:.1f} min")
+print(f"Median latency per vignette:   {full.median_latency_seconds:.2f} s")
+print(f"Mean prompt tokens/vignette:   {full.mean_prompt_tokens:.0f}")
+print(f"Mean output tokens/vignette:   {full.mean_completion_tokens:.0f}")
+print(f"Mean total tokens/vignette:    {full.mean_total_tokens:.0f}")
+print(f"Est. USD for 1,066 vignettes (@ $3/hr H100): ${full.estimated_cost_usd(3.0):.2f}")
 
 # COMMAND ----------
 
 print("By category:")
 print(full.rows.groupby("category")["correct"].agg(["mean", "count"]).sort_values("mean"))
-print("\nParse-failure rate by category (top 10):")
-print(full.rows.groupby("category")["parse_failed"].mean().sort_values(ascending=False).head(10))
-print("\nTool-call distribution:")
+print("\nTool-call distribution (should be HIGHER than B baseline):")
 print(full.rows["n_tool_calls"].describe())
 
 # COMMAND ----------
 
-# MAGIC %md ## 8. Cleanup
+# MAGIC %md ## 9. Cleanup
 
 # COMMAND ----------
 

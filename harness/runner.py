@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,7 +46,22 @@ class EvalResults:
     n: int
     n_correct: int
     n_parse_failures: int
+    # Cost/time aggregates (per-vignette means + run totals)
+    mean_prompt_tokens: float = 0.0
+    mean_completion_tokens: float = 0.0
+    mean_total_tokens: float = 0.0
+    median_latency_seconds: float = 0.0
+    total_run_seconds: float = 0.0   # wall-clock for the whole run (not sum of per-vignette)
     meta: dict[str, Any] = field(default_factory=dict)
+
+    def estimated_cost_usd(self, gpu_hourly_rate_usd: float = 3.0) -> float:
+        """Estimated USD cost for the whole run on a self-hosted single H100.
+
+        Uses total wall-clock × hourly rate. Comparable across conditions
+        when the same hardware and worker count are used. Document the rate
+        used in any paper figure.
+        """
+        return self.total_run_seconds * gpu_hourly_rate_usd / 3600.0
 
     def save(self, out_dir: str | Path) -> Path:
         out = Path(out_dir)
@@ -56,6 +72,11 @@ class EvalResults:
             "n": self.n,
             "n_correct": self.n_correct,
             "n_parse_failures": self.n_parse_failures,
+            "mean_prompt_tokens": self.mean_prompt_tokens,
+            "mean_completion_tokens": self.mean_completion_tokens,
+            "mean_total_tokens": self.mean_total_tokens,
+            "median_latency_seconds": self.median_latency_seconds,
+            "total_run_seconds": self.total_run_seconds,
             **self.meta,
         }
         (out / "summary.json").write_text(json.dumps(summary, indent=2))
@@ -84,6 +105,7 @@ def run_eval(
         ds = ds.select(range(min(n, len(ds))))
     total = len(ds)
 
+    run_t0 = time.time()
     if max_workers <= 1:
         results_by_idx = {}
         for i, row in enumerate(ds):
@@ -95,6 +117,7 @@ def run_eval(
         results_by_idx = _run_parallel(
             adapter, ds, system, max_workers=max_workers, progress_every=progress_every
         )
+    total_run_seconds = time.time() - run_t0
 
     rows = [results_by_idx[i] for i in range(total)]
 
@@ -105,7 +128,12 @@ def run_eval(
         n=len(df),
         n_correct=int(df["correct"].sum()),
         n_parse_failures=int(df["parse_failed"].sum()),
-        meta={"dataset": DATASET_NAME, "split": split},
+        mean_prompt_tokens=float(df["prompt_tokens"].mean()),
+        mean_completion_tokens=float(df["completion_tokens"].mean()),
+        mean_total_tokens=float(df["total_tokens"].mean()),
+        median_latency_seconds=float(df["elapsed_seconds"].median()),
+        total_run_seconds=total_run_seconds,
+        meta={"dataset": DATASET_NAME, "split": split, "max_workers": max_workers},
     )
     if out_dir is not None:
         results.save(out_dir)
@@ -115,17 +143,25 @@ def run_eval(
 def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dict[str, Any]:
     """Run + score a single vignette. Pure function; safe to call from threads."""
     prompt = f"{row['question_text']}\n\n{row['confinement_instruction']}"
+    t0 = time.time()
     try:
         resp = adapter.run(prompt, system=system)
         output_text = resp.text
         n_tool_calls = getattr(resp, "n_tool_calls", 0)
         stop_reason = getattr(resp, "stop_reason", "n/a")
+        prompt_tokens = getattr(resp, "prompt_tokens", 0)
+        completion_tokens = getattr(resp, "completion_tokens", 0)
+        n_model_calls = getattr(resp, "n_model_calls", 0)
         adapter_error = None
     except Exception as e:
         output_text = ""
         n_tool_calls = 0
         stop_reason = "adapter_error"
+        prompt_tokens = 0
+        completion_tokens = 0
+        n_model_calls = 0
         adapter_error = f"{type(e).__name__}: {e}"
+    elapsed_seconds = time.time() - t0
 
     try:
         expected = json.loads(row["expected_output"])
@@ -150,6 +186,11 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         "correct": correct,
         "parse_failed": not parse_ok,
         "n_tool_calls": n_tool_calls,
+        "n_model_calls": n_model_calls,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "elapsed_seconds": elapsed_seconds,
         "stop_reason": stop_reason,
         "adapter_error": adapter_error,
         "raw_output": output_text,
