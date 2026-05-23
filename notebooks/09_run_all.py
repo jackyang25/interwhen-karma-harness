@@ -51,6 +51,36 @@
 
 # COMMAND ----------
 
+# DBTITLE 1,Patch interwhen EAT_helper (upstream vllm top-level import)
+# interwhen@2d041c2f has `from vllm import SamplingParams` at the top of
+# EAT_helper.py, which is pulled in by interwhen/monitors/__init__.py via
+# earlyStopping.py — even though condition E never uses EATMonitor/DEERMonitor.
+# vllm lives in /tmp/vllm_env (the isolated venv), not the main kernel, so
+# the import fails at module load time. Patch it to a try/except on every boot.
+import pathlib, sys
+
+for sp in sys.path:
+    p = pathlib.Path(sp) / "interwhen/utils/EAT_helper.py"
+    if p.exists():
+        content = p.read_text()
+        old = "from vllm import SamplingParams"
+        new = (
+            "try:\n"
+            "    from vllm import SamplingParams\n"
+            "except ModuleNotFoundError:\n"
+            "    SamplingParams = None  # vllm not in main kernel"
+        )
+        if old in content and new not in content:
+            p.write_text(content.replace(old, new, 1))
+            print(f"Patched interwhen EAT_helper.py at {p}")
+        else:
+            print(f"EAT_helper.py already patched at {p}")
+        break
+else:
+    print("WARNING: interwhen/utils/EAT_helper.py not found on sys.path")
+
+# COMMAND ----------
+
 # MAGIC %md ## 2. Paste secrets
 
 # COMMAND ----------
