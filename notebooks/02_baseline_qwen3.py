@@ -20,7 +20,7 @@
 
 # MAGIC %pip install -q \
 # MAGIC   "vllm==0.9.2" "transformers==4.52.4" \
-# MAGIC   "openai>=1.0" "httpx" \
+# MAGIC   "openai>=1.0" "httpx" "anthropic" \
 # MAGIC   "fastmcp-slim[client]>=2.0" "datasets>=2.0" "huggingface-hub" \
 # MAGIC   "pandas" "numpy" "scipy" "statsmodels" "nest-asyncio" \
 # MAGIC   "nvidia-cusparselt-cu12"
