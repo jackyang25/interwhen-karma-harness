@@ -1,9 +1,11 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 02 — Qwen3 baseline (Condition B)
+# MAGIC # 02 — Qwen3 Condition B (with tools)
 # MAGIC
 # MAGIC Runs Qwen3-30B-A3B-Thinking-2507 + MedAI tools on `medical_calculator_eval`.
-# MAGIC The reference baseline for the actual study.
+# MAGIC The reference condition for the study — every other Qwen3 condition
+# MAGIC (A no-tools, C prompt-instruction, D' post-hoc, E interwhen) is
+# MAGIC compared against this.
 # MAGIC
 # MAGIC **vLLM is launched as a subprocess** in an isolated venv so its crashes
 # MAGIC show real errors instead of taking the notebook kernel down. The venv
@@ -164,7 +166,7 @@ from harness.runner import run_eval
 from harness.analysis import wilson_ci
 
 adapter = Qwen3Adapter(base_url=server.base_url, use_tools=True)
-pilot = run_eval(adapter, n=10, max_workers=4, out_dir="/dbfs/results/qwen3_baseline_pilot/")
+pilot = run_eval(adapter, n=10, max_workers=4, out_dir="/dbfs/results/qwen3_condition_B_pilot/")
 print(f"Pilot accuracy: {pilot.accuracy:.1%} ({pilot.n_correct}/{pilot.n})")
 print(f"Parse failures: {pilot.n_parse_failures}")
 print(f"Tool calls per vignette (mean): {pilot.rows['n_tool_calls'].mean():.1f}")
@@ -175,16 +177,16 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Full 1,066-row baseline
+# MAGIC %md ## 7. Full 1,066-row Condition B
 
 # COMMAND ----------
 
 # 64 workers: matches what a single H100 with Qwen3-30B-A3B-Thinking can
 # realistically batch via vLLM's continuous-batching scheduler. Higher just
 # queues HTTP requests without GPU speedup; lower under-utilizes the GPU.
-full = run_eval(adapter, n=None, max_workers=64, out_dir="/dbfs/results/qwen3_baseline_full/")
+full = run_eval(adapter, n=None, max_workers=64, out_dir="/dbfs/results/qwen3_condition_B_full/")
 ci = wilson_ci(full.n_correct, full.n)
-print(f"Baseline (Condition B) accuracy: {ci}")
+print(f"Condition B (with tools) accuracy: {ci}")
 
 # COMMAND ----------
 
