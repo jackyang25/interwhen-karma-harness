@@ -26,8 +26,8 @@ See TESTING.md Section 6 ("Open methodological decisions") and Section 7
 | Sampling: top-p | TBD | — |
 | Condition C prompt (input verification, upfront) | `conf/prompts/condition_c.txt` | — |
 | Condition B' prompt (force tool use, upfront) | `conf/prompts/condition_b_prime.txt` | — |
-| Condition D' verifier prompt | `conf/prompts/condition_d_prime.txt` | — |
-| Condition D' revision policy | TBD (max rounds, when to invoke) | — |
+| Condition D verifier prompt | `conf/prompts/condition_d.txt` | — |
+| Condition D revision policy | TBD (max rounds, when to invoke) | — |
 | Condition E feedback format | TBD (first-person reflection vs user-message) | — |
 | Condition E max retry rounds | TBD (default candidate: 2) | — |
 | Calculator subset covered by verifier | TBD (list in `conf/calculator_subset.json`) | — |
@@ -43,11 +43,11 @@ Bonferroni-corrected at α = 0.05 / 4 = 0.0125 per comparison:
 - B vs A — McNemar's paired test
 - E vs B — McNemar's paired test
 - E vs C — McNemar's paired test
-- E vs D' — McNemar's paired test
+- E vs D — McNemar's paired test
 
 ## Exploratory analyses (reported separately, not in confirmatory family)
 
-- **B' vs B** — McNemar's paired test at uncorrected α = 0.05. Tests whether prompt-level tool-use enforcement closes the tool-underuse gap observed in the Qwen3 baseline (median 0 calls/vignette in B). Designated exploratory because the condition was specified after observing baseline behavior; this commit pre-dates running C, D', E, and B'. Findings reported with the exploratory designation explicit.
+- **B' vs B** — McNemar's paired test at uncorrected α = 0.05. Tests whether prompt-level tool-use enforcement closes the tool-underuse gap observed in the Qwen3 baseline (median 0 calls/vignette in B). Designated exploratory because the condition was specified after observing baseline behavior; this commit pre-dates running C, D, E, and B'. Findings reported with the exploratory designation explicit.
 - **Cost / latency secondary endpoints.** Per-vignette: mean prompt tokens, mean completion tokens, median wall-clock latency, number of model invocations, number of tool calls. Per-run: total wall-clock, estimated USD at $3/hr H100 (stated in any reported figure). Token counts compared across conditions; wall-clock compared only at matched `max_workers`. Reported alongside accuracy, not in the Bonferroni family. Motivated by the LMIC-deployment framing of the study (TESTING.md §4.5).
 - **Stratified analysis of E vs B on the tool-using subset** — restricted to rows where Condition B made ≥1 tool call. Direct test of whether input verification helps where it can act.
 - **Condition-level error-type decomposition** — wrong-calculator vs wrong-input failure rates per condition, using EkaCare's taxonomy where applicable.
@@ -68,7 +68,7 @@ EkaCare's published 81.9% (±3pp). If not, investigate before continuing.
 
 **Condition A on Qwen3 (2026-05-23):** 41.5% accuracy (Wilson CI [38.5%, 44.4%], n = 1,066). Tool calls: 0.0 across all rows (sanity check confirmed). B − A = +7.6 pp.
 
-The tool-underuse pattern observed in B prompted the addition of Condition B' (force tool use via prompt) as a secondary, exploratory condition prior to running C, D', or E. This commit is the timestamped record of that decision.
+The tool-underuse pattern observed in B prompted the addition of Condition B' (force tool use via prompt) as a secondary, exploratory condition prior to running C, D, or E. This commit is the timestamped record of that decision.
 
 ## Methodological refactor: channel choice for Qwen3 (2026-05-23)
 
@@ -83,7 +83,7 @@ across all Qwen3 conditions, the Qwen3 adapter is refactored to text-mode:
 - Qwen3 emits `<tool_call>{...}</tool_call>` tags as raw text
 - interwhen `VerifyMonitor` watches the stream and fires at `</tool_call>`
 
-Conditions A, B, B', C, D' need to be re-run on the new channel for clean
+Conditions A, B, B', C, D need to be re-run on the new channel for clean
 comparisons. The earlier (structured-tools) B = 49.1% and A = 41.5% numbers
 are recorded for historical reference but are not part of the final analysis
 under this refactored design. The new channel is the same model behaviour

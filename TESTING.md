@@ -42,12 +42,12 @@ This project tests whether interwhen-style intermediate verification is that int
 - **B vs A** — Did tools help at all? (Replication check.)
 - **E vs B** — Did verification add value beyond tools? (Foundational claim.)
 - **E vs C** — Did verification beat a best-effort upfront prompt intervention? (Deployment-critical.)
-- **E vs D'** — Did mid-stream verification beat the cheapest verification pattern? (Deployment-critical.)
+- **E vs D** — Did mid-stream verification beat the cheapest verification pattern? (Deployment-critical.)
 
 **Secondary comparison (exploratory, not in confirmatory family):**
 - **B' vs B** — Does forcing tool use via a prompt close the tool-underuse gap observed in the open-weights baseline?
 
-The secondary comparison was added after Condition B was run on Qwen3 and revealed that the model invokes tools on a small minority of vignettes (median 0 calls/vignette). Because input-verification interventions (C/D'/E) can only act on rows where a tool call occurs, the underuse rate caps the effect size of the primary track. B' characterizes whether prompt-level tool-use enforcement narrows that gap; it is reported as exploratory because the condition was specified after observing baseline behavior. See pre-registration for the timestamped commit predating C/D'/E.
+The secondary comparison was added after Condition B was run on Qwen3 and revealed that the model invokes tools on a small minority of vignettes (median 0 calls/vignette). Because input-verification interventions (C/D/E) can only act on rows where a tool call occurs, the underuse rate caps the effect size of the primary track. B' characterizes whether prompt-level tool-use enforcement narrows that gap; it is reported as exploratory because the condition was specified after observing baseline behavior. See pre-registration for the timestamped commit predating C/D/E.
 
 ---
 
@@ -72,7 +72,7 @@ EkaCare's open-source medical AI evaluation framework. Provides dataset loading,
 - **Sonnet (apparatus validation only):** Anthropic's structured Tools API. Sonnet's natively trained tool-call mechanism, what EkaCare's published table presumably used.
 - **Qwen3 (all study conditions A/B/C/D'/E/B'):** raw text via vLLM's `/v1/completions` endpoint. The adapter places MedAI tool descriptions in the prompt via the model's chat template (`apply_chat_template(..., tools=...)`) and Qwen3 emits tool calls as `<tool_call>{...}</tool_call>` text blocks. This makes each tool call a detectable step in the visible stream, so interwhen's `step_extractor` can fire verification at the commit boundary — matching the framework's published step definitions (a move in Maze, an op in Game24, a code block in Verina). The structured tool-choice API path (vLLM's `--enable-auto-tool-choice`) is *not* used for Qwen3 because it bypasses the raw text stream interwhen needs to monitor.
 
-The Sonnet-vs-Qwen3 channel asymmetry is by-role rather than within-comparison: Sonnet is only used for apparatus validation, never as an experimental arm. All six Qwen3 conditions (A, B, C, D', E, B') run on the same text-mode channel, so the comparisons stand on the same methodological footing.
+The Sonnet-vs-Qwen3 channel asymmetry is by-role rather than within-comparison: Sonnet is only used for apparatus validation, never as an experimental arm. All six Qwen3 conditions (A, B, C, D, E, B') run on the same text-mode channel, so the comparisons stand on the same methodological footing.
 
 ### 4.3 MedAI MCP Tools
 
@@ -146,30 +146,30 @@ Five primary conditions plus one secondary condition on Qwen3-30B-A3B-Thinking-2
 | **A** | Primary | No tools, no intervention |
 | **B** | Primary | Tools, no intervention (replicates EkaCare's setup) |
 | **C** | Primary | Tools + best-effort prompt instruction asking the model to verify tool-call inputs (units, enums, numerics) against the case before computing (upfront) |
-| **D'** | Primary | Tools + post-hoc verification call on the produced answer (cheapest verification pattern) |
+| **D** | Primary | Tools + post-hoc verification call on the produced answer (cheapest verification pattern) |
 | **E** | Primary | Tools + interwhen with semantic verifier (headline) |
 | **B'** | Secondary | Tools + prompt instruction requiring the model to use the calculator tool for every computation (tool-use enforcement) |
 
 ### Why these conditions and not more
 
-The original plan considered 8 conditions including self-consistency (F), few-shot examples (C'), mid-reasoning self-verification (D), and a schema-only verifier ablation (G). These were dropped for leanness.
+The original plan considered 8 conditions including self-consistency (F), few-shot examples (C'), mid-reasoning self-verification, and a schema-only verifier ablation (G). These were dropped for leanness.
 
 **Cost of dropping them:** reviewers can ask "couldn't variance reduction (F), worked examples (C'), or model self-checking (D) have achieved the same effect?" None of these are tested. The claim is scoped narrowly to the conditions run — not all possible cheaper alternatives.
 
 **Framing of Condition C as best-effort prompting (not minimal prompting).** Earlier drafts described C as "the cheapest upfront intervention" — a one-sentence nudge. After internal review, C was reframed as a **best-effort prompt-only intervention**: 2-3 sentences, concretely specifying what to verify (units, enum choices, numerics), with a fallback instruction for missing evidence. This raises the bar that E must clear. The point of C is no longer "what does the laziest possible prompt achieve" but "what does prompting alone, done well, achieve" — the comparison that actually matters for deployment decisions. The locked text lives at `conf/prompts/condition_c.txt`.
 
-**Why D' is kept:** it is structurally distinct from C — post-hoc on the produced output, not an upfront instruction — and it is the cheapest verification pattern (one extra call vs interwhen's mid-stream forking). Without D', "E beats C" cannot rule out that a simple end-of-output check would have done equally well, which is the most important deployment question this study can answer.
+**Why D is kept:** it is structurally distinct from C — post-hoc on the produced output, not an upfront instruction — and it is the cheapest verification pattern (one extra call vs interwhen's mid-stream forking). Without D, "E beats C" cannot rule out that a simple end-of-output check would have done equally well, which is the most important deployment question this study can answer.
 
 **Why B' was added (secondary).** Condition B on Qwen3 revealed that the model elects to call tools on ~25% of vignettes (median 0 calls/vignette) — substantially less than closed-API models like Sonnet (mean 4.3 calls/vignette under the same setup). Because the primary input-verification track (C/D'/E) only acts on rows where a tool call occurs, the underuse rate constrains the effect-size ceiling of those conditions. B' adds a prompt-level intervention targeting the tool-use channel itself, structurally parallel to D' (both are B-variants intervening on different stages of the tool-use pipeline). B' vs B answers a distinct question — "does forcing tool use help open-weights models close the tool-access gap" — and is reported as exploratory because the condition was specified after observing baseline behavior. The primary input-verification claim is unchanged.
 
 ### Open methodological decisions (locked in pre-registration before production)
 
 - **Exact prompt text for Condition C.** Drafted and pilot-validated; locked before production.
-- **Verifier model and prompt for Condition D'.** Verifier model is a different instance from the model being evaluated to avoid self-agreement bias. Verifier prompt drafted and pilot-validated. Revision policy (whether and how many times the original model is asked to revise on flagged inconsistency) pilot-determined.
+- **Verifier model and prompt for Condition D.** Verifier model is a different instance from the model being evaluated to avoid self-agreement bias. Verifier prompt drafted and pilot-validated. Revision policy (whether and how many times the original model is asked to revise on flagged inconsistency) pilot-determined.
 - **Fact extractor model.** Different from the model being evaluated. Validation against a hand-annotated held-out set must show ≥95% field-level accuracy before production use.
 - **Feedback format for Condition E.** First-person reflection vs user-message style. Pilot-determined.
 - **Max retry rounds per fork point in E.** Default candidate: 2. Pilot-validated.
-- **Sampling parameters** (temperature, top-p) for A/B/C/D'/E. Match EkaCare's setup once verified in KARMA codebase, otherwise pilot-determined.
+- **Sampling parameters** (temperature, top-p) for A/B/C/D/E. Match EkaCare's setup once verified in KARMA codebase, otherwise pilot-determined.
 - **Calculator subset the verifier handles.** Specific calculators from EkaCare's 403 covered by the verifier. Affects which vignettes are eligible for E.
 - **KARMA, model, and benchmark version pinning.** Specific git commits / model revisions / dataset revisions documented in pre-registration.
 
@@ -185,7 +185,7 @@ For paired comparisons (same questions, different conditions): **McNemar's test*
 
 ### Multiple comparisons
 
-Four **confirmatory** comparisons (B vs A, E vs B, E vs C, E vs D') → Bonferroni correction applied to the family at α = 0.05 / 4 = 0.0125 per comparison.
+Four **confirmatory** comparisons (B vs A, E vs B, E vs C, E vs D) → Bonferroni correction applied to the family at α = 0.05 / 4 = 0.0125 per comparison.
 
 The secondary comparison **B' vs B** is reported as **exploratory** and is *not* included in the Bonferroni family. It is McNemar-tested at uncorrected α = 0.05 with the exploratory designation made explicit in any reported result. This preserves statistical power on the primary input-verification claim and reflects that B' was added in response to a baseline observation rather than as a pre-specified confirmatory hypothesis.
 
@@ -241,7 +241,7 @@ This maps cleanly to several real-world deployment patterns (EHR-summary-driven 
 
 ### Effect-size ceiling on this model
 
-Condition B on Qwen3 revealed substantial tool underuse (median 0 calls/vignette, mean 0.38; ~75% of vignettes solved with zero tool calls). Because the input-verification interventions (C/D'/E) only act on rows where a tool call occurs, the absolute effect they can produce is bounded by the tool-use rate. Reported effect sizes for the primary track must be interpreted against this ceiling. Condition B' is included specifically to characterize this gap; its effect is therefore expected to be larger than the primary-track effects, but addresses a different question (tool-use rate) rather than the wrong-input residual the primary claim targets.
+Condition B on Qwen3 revealed substantial tool underuse (median 0 calls/vignette, mean 0.38; ~75% of vignettes solved with zero tool calls). Because the input-verification interventions (C/D/E) only act on rows where a tool call occurs, the absolute effect they can produce is bounded by the tool-use rate. Reported effect sizes for the primary track must be interpreted against this ceiling. Condition B' is included specifically to characterize this gap; its effect is therefore expected to be larger than the primary-track effects, but addresses a different question (tool-use rate) rather than the wrong-input residual the primary claim targets.
 
 ### Method-related notes
 
@@ -269,7 +269,7 @@ interwhen-karma-harness/
 │   ├── verifier/             # Semantic verifier (deterministic comparison)
 │   ├── monitors/             # interwhen Monitor subclasses
 │   ├── karma_adapter/        # Custom KARMA model adapter
-│   ├── conditions/           # A / B / C / D' / E configurations
+│   ├── conditions/           # A / B / C / D / E configurations
 │   ├── analysis/             # Statistical analysis, decomposition, plotting
 │   ├── _patches.py           # Runtime patch: adds EKA_API_TOKEN Bearer auth to KARMA
 │   └── tests/                # Unit tests
