@@ -196,8 +196,33 @@ server.wait_ready(timeout=900)
 # COMMAND ----------
 
 # DBTITLE 1,Cell 14
-CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E"]  # all conditions
-FORCE_RERUN = False        # skip conditions with existing summary.json (idempotent)
+# ──────────────────────────────────────────────────────────────────────────────
+# Focused re-run: only conditions whose ADAPTER CODE changed in the 2026-05
+# instrumentation patch, plus the new B_prime_E condition.
+#
+#   D          → harness/verifier/posthoc.py gained primary_/verifier_ breakouts
+#   E          → inline _VerifiedAdapter gained extractor_/qwen3_ breakouts
+#                + violations_history JSON column
+#   B_prime_E  → brand new condition (never run before)
+#
+# A, B, C, B_prime are intentionally LEFT OUT — their adapters (Qwen3Adapter
+# with use_tools True/False) are unchanged, so re-running them would produce
+# identical accuracy values and just spend GPU time. 09_analysis loads them
+# from their existing parquets; its _col_or_zero helper handles the older
+# schema gracefully (new breakout columns default to 0 for legacy data).
+#
+# FORCE_RERUN=True is REQUIRED for this run — D and E already have summary.json
+# files from prior runs, and without the override they'd be skipped as
+# "already complete". BACKUP_LEGACY=True (default) moves the previous D and E
+# parquets into timestamped _backup_<ts>/ subdirs before the fresh data writes,
+# so the old data is preserved if you need to inspect it later.
+#
+# To run EVERYTHING from scratch later (e.g., final reproducibility pass),
+# restore:
+#   CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E", "B_prime_E"]
+# ──────────────────────────────────────────────────────────────────────────────
+CONDITIONS_TO_RUN = ["D", "E", "B_prime_E"]
+FORCE_RERUN = True         # override idempotency: D and E already have summary.json
 BACKUP_LEGACY = True       # move any existing parquet to _backup_<ts>/ before a fresh run
 
 # COMMAND ----------
@@ -224,12 +249,13 @@ RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 # Pilot+full max-workers per condition. Picked to match the same numbers each
 # individual condition notebook uses, so results are comparable across runs.
 WORKERS = {
-    "A":        128,
-    "B":        64,
-    "B_prime":  64,
-    "C":        64,
-    "D":        32,   # adds a Sonnet verifier call per vignette
-    "E":        32,   # extractor (async Sonnet) + verified tool loop + potential verifier re-prompts
+    "A":          128,
+    "B":           64,
+    "B_prime":     64,
+    "C":           64,
+    "D":           32,   # adds a Sonnet verifier call per vignette
+    "E":           32,   # extractor (async Sonnet) + verified tool loop + potential verifier re-prompts
+    "B_prime_E":   32,   # E mechanics + B' system prompt forces tool use → most Sonnet pressure
 }
 
 PILOT_N = 10
@@ -246,12 +272,19 @@ def _system_for(cond: str) -> str | None:
     turn is sufficient for JSON output).
     """
     mapping = {
-        "A":       None,    # no system prompt
-        "B":       None,
-        "B_prime": REPO_ROOT / "conf/prompts/condition_b_prime.txt",
-        "C":       REPO_ROOT / "conf/prompts/condition_c.txt",
-        "D":       None,    # no system prompt; verifier has its own prompt
-        "E":       None,
+        "A":         None,    # no system prompt
+        "B":         None,
+        "B_prime":   REPO_ROOT / "conf/prompts/condition_b_prime.txt",
+        "C":         REPO_ROOT / "conf/prompts/condition_c.txt",
+        "D":         None,    # no system prompt; verifier has its own prompt
+        "E":         None,
+        # B_prime_E (exploratory, post-hoc): same locked B' system prompt — no new
+        # prompt file. The combination effect comes from routing this through
+        # the E adapter (see _build_adapter), not from any new prompt content.
+        # This isolation matters: if we created a third "merged" prompt, we'd be
+        # testing two variables at once. Reusing the literal B' prompt keeps
+        # the only difference vs E the system-message channel.
+        "B_prime_E": REPO_ROOT / "conf/prompts/condition_b_prime.txt",
     }
     p = mapping.get(cond)
     return p.read_text().strip() if p is not None else None
@@ -272,8 +305,14 @@ def _build_adapter(cond: str):
             verifier_prompt_path=str(REPO_ROOT / "conf/prompts/condition_d.txt"),
             verifier_model="claude-sonnet-4-6",
         )
-    if cond == "E":
+    if cond in ("E", "B_prime_E"):
         # Condition E: Qwen3 tool-calling loop with ClinicalInputMonitor intercept.
+        #
+        # B_prime_E (exploratory): EXACT same adapter as E. The only difference
+        # from E is the system prompt (handled by _system_for, threaded through
+        # run_eval → adapter.run(prompt, system=...)). Sharing the adapter is
+        # the methodological point: we want to isolate the system-prompt effect
+        # *on top of* the E mechanics, not introduce any other code-path delta.
         #
         # Architecture (mirrors Qwen3Adapter.run() exactly, adds one step):
         #   1. Call /v1/completions, stop at </tool_call>
@@ -316,8 +355,14 @@ def _build_adapter(cond: str):
                 self._last_monitor = None   # populated after each run(); inspect for smoke tests
 
             def run(self, prompt, system=None):
+                import time as _time
+
                 # ── 1. Extract patient facts (Sonnet, deterministic) ──────────────
+                t_extract = _time.time()
                 facts = extractor.extract(prompt)
+                extractor_elapsed_s = _time.time() - t_extract
+                extractor_prompt_tokens = facts.prompt_tokens
+                extractor_completion_tokens = facts.completion_tokens
 
                 # ── 2. Render prompt with MCP tool schemas ────────────────────────
                 messages = []
@@ -338,11 +383,12 @@ def _build_adapter(cond: str):
 
                 n_tool_calls    = 0     # successful MCP dispatches
                 n_model_calls   = 0     # LLM calls (>tool_calls when verifier fires)
-                prompt_tokens   = facts.prompt_tokens
-                completion_tokens = facts.completion_tokens
+                qwen3_prompt_tokens     = 0
+                qwen3_completion_tokens = 0
                 rolling_prompt  = rendered
 
-                # ── 4. Tool-calling loop ──────────────────────────────────────────
+                # ── 4. Tool-calling loop (timed; tokens summed from vLLM usage) ───
+                t_qwen3 = _time.time()
                 for _ in range(_MAX_TURNS + 1):
                     resp = client.completions.create(
                         model=_MODEL_ID,
@@ -354,8 +400,8 @@ def _build_adapter(cond: str):
                     )
                     n_model_calls += 1
                     if resp.usage is not None:
-                        prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
-                        completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
+                        qwen3_prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
+                        qwen3_completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
 
                     choice    = resp.choices[0]
                     generated = choice.text or ""
@@ -393,6 +439,7 @@ def _build_adapter(cond: str):
                     # Count only real MCP dispatches (no violations, not malformed).
                     if not event_info.get("violations") and not event_info.get("malformed"):
                         n_tool_calls += 1
+                qwen3_elapsed_s = _time.time() - t_qwen3
 
                 # ── 5. Extract final answer text ──────────────────────────────────
                 tail = rolling_prompt[len(rendered):]
@@ -407,11 +454,21 @@ def _build_adapter(cond: str):
                     raw_prompt=rendered,
                     raw_completion=rolling_prompt[len(rendered):],
                     stop_reason="stop",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
+                    # Honest totals = extractor (Sonnet) + Qwen3 (on-GPU vLLM).
+                    prompt_tokens=extractor_prompt_tokens + qwen3_prompt_tokens,
+                    completion_tokens=extractor_completion_tokens + qwen3_completion_tokens,
                     n_model_calls=n_model_calls,
                     n_verifier_fires=monitor.metrics.n_verifier_fires,
                     n_fixes_applied=monitor.metrics.n_fixes_applied,
+                    # Deployment-honest breakouts:
+                    extractor_prompt_tokens=extractor_prompt_tokens,
+                    extractor_completion_tokens=extractor_completion_tokens,
+                    extractor_elapsed_s=extractor_elapsed_s,
+                    qwen3_prompt_tokens=qwen3_prompt_tokens,
+                    qwen3_completion_tokens=qwen3_completion_tokens,
+                    qwen3_elapsed_s=qwen3_elapsed_s,
+                    # Per-row structured verifier events (failure analysis input).
+                    violations_history=list(monitor.metrics.violations_history),
                 )
 
         return _VerifiedAdapter()

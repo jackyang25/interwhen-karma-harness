@@ -247,7 +247,11 @@ class CondEResponse:
     n_tool_calls: int          # reflected from monitor.metrics.n_steps_seen
     raw_messages: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = "stop"
-    prompt_tokens: int = 0     # not tracked at fine granularity in interwhen streaming
+    # prompt_tokens / completion_tokens / total_tokens are the honest cross-
+    # condition totals (extractor + Qwen3 streaming), so cost_latency_table
+    # comparisons across A/B/C/D/E/B' are apples-to-apples. Breakouts below
+    # let you separate Sonnet API cost from local-GPU compute.
+    prompt_tokens: int = 0
     completion_tokens: int = 0
     n_model_calls: int = 0
     # E-specific
@@ -256,6 +260,20 @@ class CondEResponse:
     extractor_ok: bool = True
     extractor_error: str = ""
     violations_history: list[dict[str, Any]] = field(default_factory=list)
+    # Cost / latency breakouts for deployment-honest interpretation.
+    # Extractor = Sonnet API call (billed by Anthropic).
+    # Qwen3 = local GPU inference (vLLM on H100). For Qwen3 tokens we
+    # tokenize the final rendered prompt and final generated continuation
+    # — this captures the actual model output cost. Retry-prompt overhead
+    # (prompt content re-sent during interwhen recursions) is NOT captured
+    # here; it's a small underestimate of vLLM-side prompt tokens but
+    # leaves completion-token compute exact.
+    extractor_prompt_tokens: int = 0
+    extractor_completion_tokens: int = 0
+    extractor_elapsed_s: float = 0.0
+    qwen3_prompt_tokens: int = 0
+    qwen3_completion_tokens: int = 0
+    qwen3_elapsed_s: float = 0.0
 
 
 class Qwen3InterwhenAdapter:
@@ -272,9 +290,11 @@ class Qwen3InterwhenAdapter:
 
     def run(self, prompt: str, system: str | None = None) -> CondEResponse:
         # 1) Extract patient facts (one Sonnet call per vignette)
+        t_extract = time.time()
         facts = self.extractor.extract(prompt)
-        prompt_tokens = facts.prompt_tokens
-        completion_tokens = facts.completion_tokens
+        extractor_elapsed_s = time.time() - t_extract
+        extractor_prompt_tokens = facts.prompt_tokens
+        extractor_completion_tokens = facts.completion_tokens
 
         # 2) Build the rendered chatml prompt for Qwen3
         messages = []
@@ -309,6 +329,7 @@ class Qwen3InterwhenAdapter:
 
         # 5) Drive interwhen (async) from our sync run() — nest_asyncio lets us
         # do this inside a notebook's running event loop.
+        t_qwen3 = time.time()
         loop = asyncio.get_event_loop()
         generated = loop.run_until_complete(
             stream_completion(
@@ -319,22 +340,47 @@ class Qwen3InterwhenAdapter:
                 async_execution=True,
             )
         )
+        qwen3_elapsed_s = time.time() - t_qwen3
 
         # 6) Pull the assistant's final text out of the generated continuation
         text = _extract_final_answer(generated)
+
+        # 7) Honest cost accounting. Sonnet usage is reported by the API;
+        # interwhen's streaming doesn't bubble vLLM `usage` events up at fine
+        # granularity, so we tokenize the rendered prompt and the final
+        # generated text with the Qwen3 tokenizer (deterministic; same one
+        # vLLM uses for billing). The completion-token count is exact for the
+        # *kept* output; tokens generated then discarded during interwhen
+        # retries are not counted (they'd show up in vLLM logs but not here).
+        # For deployment cost, completion tokens dominate, so this is a small
+        # underestimate of total GPU work — never an overestimate.
+        qwen3_prompt_tokens = len(_TOKENIZER.encode(rendered))
+        qwen3_completion_tokens = len(_TOKENIZER.encode(generated))
+
+        # vLLM streaming sessions per vignette = 1 initial + 1 per fix
+        # (each fix rewrites the prompt and interwhen recurses).
+        n_qwen3_streaming_sessions = 1 + monitor.metrics.n_fixes_applied
 
         return CondEResponse(
             text=text,
             n_tool_calls=monitor.metrics.n_steps_seen,
             stop_reason="stop",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            n_model_calls=1,   # extractor; interwhen streams so we don't recount Qwen3
+            # Honest cross-condition totals.
+            prompt_tokens=extractor_prompt_tokens + qwen3_prompt_tokens,
+            completion_tokens=extractor_completion_tokens + qwen3_completion_tokens,
+            # 1 extractor + N Qwen3 streaming sessions.
+            n_model_calls=1 + n_qwen3_streaming_sessions,
             n_verifier_fires=monitor.metrics.n_verifier_fires,
             n_fixes_applied=monitor.metrics.n_fixes_applied,
             extractor_ok=facts.extractor_ok,
             extractor_error=facts.extractor_error,
             violations_history=monitor.metrics.violations_history,
+            extractor_prompt_tokens=extractor_prompt_tokens,
+            extractor_completion_tokens=extractor_completion_tokens,
+            extractor_elapsed_s=extractor_elapsed_s,
+            qwen3_prompt_tokens=qwen3_prompt_tokens,
+            qwen3_completion_tokens=qwen3_completion_tokens,
+            qwen3_elapsed_s=qwen3_elapsed_s,
         )
 
 

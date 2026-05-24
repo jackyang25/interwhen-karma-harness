@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -37,6 +38,9 @@ class VerifiedResponse:
     n_tool_calls: int
     raw_messages: list[dict[str, Any]]
     stop_reason: str
+    # Honest cross-condition totals (primary Qwen3 + Sonnet verifier + any
+    # revision). Use the *_primary_* and *_verifier_* breakouts below to
+    # separate on-GPU cost from Anthropic API cost.
     prompt_tokens: int
     completion_tokens: int
     n_model_calls: int
@@ -44,6 +48,16 @@ class VerifiedResponse:
     verifier_consistent: bool   # True if verifier did not flag (or wasn't called)
     verifier_issue: str          # Description of flagged issue, empty if consistent
     revised: bool                # True if the primary was asked to revise
+    # Cost / latency breakouts for deployment-honest interpretation.
+    # Primary = Qwen3 inference (vLLM on H100), summed across initial + revision.
+    # Verifier = Sonnet API call (billed by Anthropic). Always exactly one
+    # verifier call per row regardless of revision.
+    primary_prompt_tokens: int = 0
+    primary_completion_tokens: int = 0
+    primary_elapsed_s: float = 0.0
+    verifier_prompt_tokens: int = 0
+    verifier_completion_tokens: int = 0
+    verifier_elapsed_s: float = 0.0
 
 
 class PostHocVerifierAdapter:
@@ -77,20 +91,24 @@ class PostHocVerifierAdapter:
         self.client = anthropic.Anthropic(api_key=api_key or os.environ["ANTHROPIC_API_KEY"])
 
     def run(self, prompt: str, system: str | None = None) -> VerifiedResponse:
-        # Step 1: primary answer
+        # Step 1: primary answer (Qwen3 on local GPU)
+        t_primary = time.time()
         first = self.primary.run(prompt, system=system)
-        prompt_tokens = getattr(first, "prompt_tokens", 0)
-        completion_tokens = getattr(first, "completion_tokens", 0)
+        primary_elapsed_s = time.time() - t_primary
+        primary_prompt_tokens = getattr(first, "prompt_tokens", 0)
+        primary_completion_tokens = getattr(first, "completion_tokens", 0)
         n_model_calls = getattr(first, "n_model_calls", 0)
         n_tool_calls = getattr(first, "n_tool_calls", 0)
 
-        # Step 2-3: verifier inspection
+        # Step 2-3: verifier inspection (Sonnet API)
+        t_verifier = time.time()
         verifier_consistent, verifier_issue, v_in, v_out = self._verify(prompt, first.text)
-        prompt_tokens += v_in
-        completion_tokens += v_out
+        verifier_elapsed_s = time.time() - t_verifier
+        verifier_prompt_tokens = v_in
+        verifier_completion_tokens = v_out
         n_model_calls += 1
 
-        # Step 4: revision on flag
+        # Step 4: revision on flag (Qwen3 again, on local GPU)
         revised = False
         final_text = first.text
         final_messages = first.raw_messages
@@ -102,12 +120,14 @@ class PostHocVerifierAdapter:
                 f"A reviewer flagged your previous answer: \"{verifier_issue}\". "
                 f"Please reconsider the case and provide a corrected JSON answer."
             )
+            t_revision = time.time()
             second = self.primary.run(revision_prompt, system=system)
+            primary_elapsed_s += time.time() - t_revision
             final_text = second.text
             final_messages = second.raw_messages
             final_stop = second.stop_reason
-            prompt_tokens += getattr(second, "prompt_tokens", 0)
-            completion_tokens += getattr(second, "completion_tokens", 0)
+            primary_prompt_tokens += getattr(second, "prompt_tokens", 0)
+            primary_completion_tokens += getattr(second, "completion_tokens", 0)
             n_model_calls += getattr(second, "n_model_calls", 0)
             n_tool_calls += getattr(second, "n_tool_calls", 0)
 
@@ -116,12 +136,19 @@ class PostHocVerifierAdapter:
             n_tool_calls=n_tool_calls,
             raw_messages=final_messages,
             stop_reason=final_stop,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            # Honest totals: primary + verifier summed.
+            prompt_tokens=primary_prompt_tokens + verifier_prompt_tokens,
+            completion_tokens=primary_completion_tokens + verifier_completion_tokens,
             n_model_calls=n_model_calls,
             verifier_consistent=verifier_consistent,
             verifier_issue=verifier_issue,
             revised=revised,
+            primary_prompt_tokens=primary_prompt_tokens,
+            primary_completion_tokens=primary_completion_tokens,
+            primary_elapsed_s=primary_elapsed_s,
+            verifier_prompt_tokens=verifier_prompt_tokens,
+            verifier_completion_tokens=verifier_completion_tokens,
+            verifier_elapsed_s=verifier_elapsed_s,
         )
 
     def _verify(self, case_prompt: str, candidate_answer: str) -> tuple[bool, str, int, int]:

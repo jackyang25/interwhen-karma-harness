@@ -152,6 +152,25 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         prompt_tokens = getattr(resp, "prompt_tokens", 0)
         completion_tokens = getattr(resp, "completion_tokens", 0)
         n_model_calls = getattr(resp, "n_model_calls", 0)
+        n_verifier_fires = getattr(resp, "n_verifier_fires", 0)
+        n_fixes_applied = getattr(resp, "n_fixes_applied", 0)
+        violations_history = getattr(resp, "violations_history", []) or []
+        # Cost / latency breakouts (populated by the E adapter; 0 elsewhere).
+        # These let cost_latency_table separate Sonnet-API cost from on-GPU
+        # inference, so deployment readers can see what's billed where.
+        extractor_prompt_tokens = getattr(resp, "extractor_prompt_tokens", 0)
+        extractor_completion_tokens = getattr(resp, "extractor_completion_tokens", 0)
+        extractor_elapsed_s = getattr(resp, "extractor_elapsed_s", 0.0)
+        qwen3_prompt_tokens = getattr(resp, "qwen3_prompt_tokens", 0)
+        qwen3_completion_tokens = getattr(resp, "qwen3_completion_tokens", 0)
+        qwen3_elapsed_s = getattr(resp, "qwen3_elapsed_s", 0.0)
+        # D-specific breakouts (populated by PostHocVerifierAdapter; 0 elsewhere).
+        primary_prompt_tokens = getattr(resp, "primary_prompt_tokens", 0)
+        primary_completion_tokens = getattr(resp, "primary_completion_tokens", 0)
+        primary_elapsed_s = getattr(resp, "primary_elapsed_s", 0.0)
+        verifier_prompt_tokens = getattr(resp, "verifier_prompt_tokens", 0)
+        verifier_completion_tokens = getattr(resp, "verifier_completion_tokens", 0)
+        verifier_elapsed_s = getattr(resp, "verifier_elapsed_s", 0.0)
         adapter_error = None
     except Exception as e:
         output_text = ""
@@ -160,6 +179,21 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         prompt_tokens = 0
         completion_tokens = 0
         n_model_calls = 0
+        n_verifier_fires = 0
+        n_fixes_applied = 0
+        violations_history = []
+        extractor_prompt_tokens = 0
+        extractor_completion_tokens = 0
+        extractor_elapsed_s = 0.0
+        qwen3_prompt_tokens = 0
+        qwen3_completion_tokens = 0
+        qwen3_elapsed_s = 0.0
+        primary_prompt_tokens = 0
+        primary_completion_tokens = 0
+        primary_elapsed_s = 0.0
+        verifier_prompt_tokens = 0
+        verifier_completion_tokens = 0
+        verifier_elapsed_s = 0.0
         adapter_error = f"{type(e).__name__}: {e}"
     elapsed_seconds = time.time() - t0
 
@@ -193,6 +227,24 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         "elapsed_seconds": elapsed_seconds,
         "stop_reason": stop_reason,
         "adapter_error": adapter_error,
+        "n_verifier_fires": n_verifier_fires,
+        "n_fixes_applied": n_fixes_applied,
+        # JSON-encoded so the column survives both parquet and CSV cleanly.
+        # Empty list "[]" for non-interwhen conditions.
+        "violations_history": json.dumps(violations_history),
+        # Honest cost / latency breakouts. Zero for non-E conditions.
+        "extractor_prompt_tokens": extractor_prompt_tokens,
+        "extractor_completion_tokens": extractor_completion_tokens,
+        "extractor_elapsed_s": extractor_elapsed_s,
+        "qwen3_prompt_tokens": qwen3_prompt_tokens,
+        "qwen3_completion_tokens": qwen3_completion_tokens,
+        "qwen3_elapsed_s": qwen3_elapsed_s,
+        "primary_prompt_tokens": primary_prompt_tokens,
+        "primary_completion_tokens": primary_completion_tokens,
+        "primary_elapsed_s": primary_elapsed_s,
+        "verifier_prompt_tokens": verifier_prompt_tokens,
+        "verifier_completion_tokens": verifier_completion_tokens,
+        "verifier_elapsed_s": verifier_elapsed_s,
         "raw_output": output_text,
     }
 

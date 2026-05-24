@@ -2,6 +2,8 @@
 
 Bundles in this directory are gitignored (only this README is committed). The bundles themselves are produced by the EDP packager and dropped here for local analysis.
 
+**Findings writeup:** see [`RESULTS.md`](./RESULTS.md) for the analysis of the currently-present bundle.
+
 ## Bundle types
 
 - **Per-run bundle** — one per condition execution. Contains config, environment, per-vignette rows, raw completions, monitor metrics (E only).

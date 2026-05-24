@@ -136,8 +136,8 @@
   },
   {
     "path": "study_gates/apparatus_gate.json",
-    "size_bytes": 142,
-    "sha256": "23c12bf40de07dc0c14d72ec92731468c6aa25821234e1cf382130ae4b2536fa"
+    "size_bytes": 204,
+    "sha256": "07ebdc6f6bc573303999299956e0b9d151ba1eec96b58e477dc5529703dac022"
   },
   {
     "path": "study_gates/apparatus_results.csv",

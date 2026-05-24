@@ -39,12 +39,16 @@ from harness.analysis import wilson_ci, mcnemar, bonferroni
 RESULTS_DIR = Path("/dbfs/results")
 
 CONDITIONS = {
-    "A":      "qwen3_condition_A_full",
-    "B":       "qwen3_condition_B_full",
-    "C":       "qwen3_condition_C_full",
-    "D":       "qwen3_condition_D_full",
-    "E":      "qwen3_condition_E_full",
-    "B_prime": "qwen3_condition_B_prime_full",
+    "A":         "qwen3_condition_A_full",
+    "B":         "qwen3_condition_B_full",
+    "C":         "qwen3_condition_C_full",
+    "D":         "qwen3_condition_D_full",
+    "E":         "qwen3_condition_E_full",
+    "B_prime":   "qwen3_condition_B_prime_full",
+    # Exploratory (post-hoc, like B'). Tests whether interwhen helps once
+    # the tool-use ceiling is removed. Kept out of the pre-registered
+    # Bonferroni family; compared in a separate exploratory block below.
+    "B_prime_E": "qwen3_condition_B_prime_E_full",
 }
 
 # One-time migration: rename legacy D_prime dirs to D
@@ -165,6 +169,48 @@ else:
 
 # COMMAND ----------
 
+# MAGIC %md ## 4b. Exploratory comparisons (B_prime_E, post-hoc)
+# MAGIC
+# MAGIC B_prime_E is a second post-hoc condition (interwhen verifier on top of
+# MAGIC forced tool use). Reported as exploratory — NOT included in the
+# MAGIC pre-registered Bonferroni family. Headline: B_prime_E vs B_prime
+# MAGIC ("does interwhen help once the tool-use ceiling is removed?").
+
+# COMMAND ----------
+
+exploratory_results: dict[str, dict] = {}
+
+for label, (left, right) in {
+    "B_prime_E_vs_B_prime": ("B_prime_E", "B_prime"),  # headline: does interwhen add value once tools are forced?
+    "B_prime_E_vs_E":       ("B_prime_E", "E"),         # secondary: does forcing tools rescue interwhen?
+}.items():
+    if left not in dfs or right not in dfs:
+        exploratory_results[label] = {"status": f"missing condition data ({left} or {right} not loaded)"}
+        print(f"{label}: missing condition data ({left} or {right} not loaded)")
+        continue
+    x, y = paired_correctness(dfs[left], dfs[right])
+    _res = mcnemar(x, y)
+    exploratory_results[label] = {
+        "n_paired":                       int(len(x)),
+        "accuracy_left":                  float(x.mean()),
+        "accuracy_right":                 float(y.mean()),
+        "delta_pp":                       float((x.mean() - y.mean()) * 100),
+        "mcnemar_b":                      int(_res.b),
+        "mcnemar_c":                      int(_res.c),
+        "p_uncorrected":                  float(_res.pvalue),
+        "significant_at_0.05_uncorrected": bool(_res.pvalue < 0.05),
+    }
+    r = exploratory_results[label]
+    print(f"{label} (exploratory, uncorrected α = 0.05):")
+    print(f"  n paired:  {r['n_paired']}")
+    print(f"  {left} accuracy:  {r['accuracy_left']:.3f}")
+    print(f"  {right} accuracy: {r['accuracy_right']:.3f}")
+    print(f"  Delta:     {r['delta_pp']:+.2f} pp")
+    print(f"  McNemar:   b={r['mcnemar_b']}, c={r['mcnemar_c']}, p={r['p_uncorrected']:.4g}")
+    print(f"  Significant at α=0.05 (uncorrected): {r['significant_at_0.05_uncorrected']}")
+
+# COMMAND ----------
+
 # MAGIC %md ## 5. Stratified analysis — effect on the tool-using subset
 # MAGIC
 # MAGIC The primary input-verification interventions (C, D, E) can only act on
@@ -178,7 +224,7 @@ if "B" in dfs:
     print(f"Tool-using subset (B): {len(b_tool_using_ids)} / {len(dfs['B'])} rows")
 
     sub_rows = []
-    for cond in ["A", "B", "C", "D", "E"]:
+    for cond in ["A", "B", "C", "D", "E", "B_prime_E"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_using_ids)]
@@ -200,11 +246,31 @@ if "B" in dfs:
 
 # COMMAND ----------
 
+def _col_or_zero(df: pd.DataFrame, col: str) -> pd.Series:
+    """Return df[col] if present, else a zero-filled Series of the same length.
+    Lets us derive api_/on_gpu_ aggregates uniformly across legacy (no breakout
+    columns) and new (extractor_/qwen3_/primary_/verifier_) schemas."""
+    if col in df.columns:
+        return df[col]
+    return pd.Series([0] * len(df), index=df.index)
+
+
 cost_rows = []
 for cond, df in dfs.items():
     if "elapsed_seconds" not in df.columns:
         cost_rows.append({"condition": cond, "note": "instrumentation missing (legacy parquet)"})
         continue
+    # API-side (Anthropic billing): extractor (E, B_prime_E) + verifier (D).
+    # Both go to 0 for A/B/C/B' where neither column exists.
+    api_prompt     = _col_or_zero(df, "extractor_prompt_tokens")     + _col_or_zero(df, "verifier_prompt_tokens")
+    api_completion = _col_or_zero(df, "extractor_completion_tokens") + _col_or_zero(df, "verifier_completion_tokens")
+    api_elapsed    = _col_or_zero(df, "extractor_elapsed_s")         + _col_or_zero(df, "verifier_elapsed_s")
+    # On-GPU (vLLM): everything in `prompt_tokens` / `completion_tokens` that
+    # wasn't API-side. Works for both legacy schemas (api_*=0 → on_gpu_*=total)
+    # and new schemas where breakouts add up to the total.
+    on_gpu_prompt     = _col_or_zero(df, "prompt_tokens")     - api_prompt
+    on_gpu_completion = _col_or_zero(df, "completion_tokens") - api_completion
+
     cost_rows.append(
         {
             "condition": cond,
@@ -212,6 +278,14 @@ for cond, df in dfs.items():
             "mean_total_tokens": df["total_tokens"].mean() if "total_tokens" in df.columns else None,
             "median_latency_s": df["elapsed_seconds"].median(),
             "mean_model_calls": df["n_model_calls"].mean() if "n_model_calls" in df.columns else None,
+            # Deployment-honest cost split: what's billed by Anthropic vs what
+            # ran on the local GPU. Zero for A/B/C/B' (pure Qwen3), populated
+            # for D (verifier), E and B_prime_E (extractor).
+            "mean_api_prompt_tokens":      float(api_prompt.mean()),
+            "mean_api_completion_tokens":  float(api_completion.mean()),
+            "mean_api_elapsed_s":          float(api_elapsed.mean()),
+            "mean_on_gpu_prompt_tokens":     float(on_gpu_prompt.mean()),
+            "mean_on_gpu_completion_tokens": float(on_gpu_completion.mean()),
         }
     )
 cost_df = pd.DataFrame(cost_rows)
@@ -257,27 +331,88 @@ display(cat_df.round(3))  # noqa: F821
 
 # COMMAND ----------
 
-# MAGIC %md ## 8. Verifier characterization (Condition E)
+# MAGIC %md ## 8. Verifier characterization (E and B_prime_E)
 # MAGIC
 # MAGIC When did the verifier fire? Did its firings correlate with corrections?
-# MAGIC The full violations history lives in the per-row response object, not
-# MAGIC the parquet — refer to the saved raw_output column for individual rows.
+# MAGIC As of the post-2026-05 patch, the full violations history is exported
+# MAGIC as a JSON-encoded column in the per-row parquet (`violations_history`).
+# MAGIC Legacy E parquets that pre-date the patch will lack the column; the
+# MAGIC block below handles both cases.
 
 # COMMAND ----------
 
-if "E" in dfs:
-    e = dfs["E"]
-    print(f"Total rows: {len(e)}")
-    print(f"E accuracy:        {e['correct'].mean():.1%}")
+import json as _vh_json
+
+verifier_summaries: dict[str, dict] = {}
+
+for cond in ["E", "B_prime_E"]:
+    if cond not in dfs:
+        continue
+    df = dfs[cond]
+    print(f"\n── {cond} ──")
+    print(f"Total rows: {len(df)}")
+    print(f"{cond} accuracy: {df['correct'].mean():.1%}")
+
+    # B as baseline for flip counts (same as the original E reconciliation logic)
     if "B" in dfs:
         b_correct_by_id = dict(zip(dfs["B"]["id"], dfs["B"]["correct"]))
-        merged = e[["id", "correct"]].copy()
+        merged = df[["id", "correct"]].copy()
         merged["b_correct"] = merged["id"].map(b_correct_by_id)
-        flips_to_correct = merged[(~merged["b_correct"]) & (merged["correct"])]
-        flips_to_wrong = merged[(merged["b_correct"]) & (~merged["correct"])]
-        print(f"E flipped wrong→right: {len(flips_to_correct)} rows")
-        print(f"E flipped right→wrong: {len(flips_to_wrong)} rows (verifier false positives that derailed correct answers)")
-        print(f"Net: {len(flips_to_correct) - len(flips_to_wrong):+d}")
+        flips_to_correct = merged[(~merged["b_correct"]) & ( merged["correct"])]
+        flips_to_wrong   = merged[( merged["b_correct"]) & (~merged["correct"])]
+        print(f"{cond} flipped wrong→right vs B: {len(flips_to_correct)} rows")
+        print(f"{cond} flipped right→wrong vs B: {len(flips_to_wrong)} rows")
+        print(f"Net vs B: {len(flips_to_correct) - len(flips_to_wrong):+d}")
+
+    # Structured verifier-event analysis from the violations_history column.
+    if "violations_history" not in df.columns:
+        verifier_summaries[cond] = {"note": "violations_history not in parquet (pre-patch run)"}
+        print("  (violations_history column not present — legacy parquet; skipping structured analysis)")
+        continue
+
+    # Parse the JSON-encoded list of intervention events per row.
+    parsed = df["violations_history"].apply(
+        lambda s: _vh_json.loads(s) if isinstance(s, str) else (s or [])
+    )
+    intervention_mask = parsed.apply(lambda lst: len(lst) > 0)
+    n_intervention_rows = int(intervention_mask.sum())
+
+    # Count total violations and tally by flagged field.
+    total_violations = int(
+        parsed.apply(lambda lst: sum(len(e.get("violations", [])) for e in lst)).sum()
+    )
+    field_counts: dict[str, int] = {}
+    for entries in parsed:
+        for entry in entries:
+            for v in entry.get("violations", []):
+                f = v.get("field", "unknown")
+                field_counts[f] = field_counts.get(f, 0) + 1
+
+    # Of rows where the verifier intervened, how many ended correct?
+    if n_intervention_rows > 0:
+        n_correct_on_intervention = int(df.loc[intervention_mask, "correct"].sum())
+        pct_correct = n_correct_on_intervention / n_intervention_rows * 100
+    else:
+        n_correct_on_intervention = 0
+        pct_correct = 0.0
+
+    summary = {
+        "n_rows":                              int(len(df)),
+        "n_intervention_rows":                 n_intervention_rows,
+        "pct_intervention_rows":               float(n_intervention_rows / max(len(df), 1) * 100),
+        "total_violations":                    total_violations,
+        "mean_violations_per_intervention_row": float(total_violations / max(n_intervention_rows, 1)),
+        "n_correct_on_intervention_rows":      n_correct_on_intervention,
+        "pct_correct_on_intervention_rows":    float(pct_correct),
+        "violations_by_field":                 dict(sorted(field_counts.items(), key=lambda kv: -kv[1])),
+    }
+    verifier_summaries[cond] = summary
+    print(f"  Verifier intervention rows: {n_intervention_rows} ({summary['pct_intervention_rows']:.1f}%)")
+    print(f"  Total violations:           {total_violations}")
+    print(f"  Of intervened rows, % correct: {summary['pct_correct_on_intervention_rows']:.1f}%")
+    if field_counts:
+        top = list(summary["violations_by_field"].items())[:5]
+        print(f"  Top flagged fields: {', '.join(f'{f}={c}' for f, c in top)}")
 
 # COMMAND ----------
 
@@ -403,7 +538,7 @@ cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
 if "B" in dfs:
     b_tool_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
     strat_rows = []
-    for cond in ["A", "B", "C", "D", "E"]:
+    for cond in ["A", "B", "C", "D", "E", "B_prime_E"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_ids)]
@@ -412,6 +547,19 @@ if "B" in dfs:
                            "accuracy_on_subset": ci.accuracy,
                            "ci_low": ci.lo, "ci_high": ci.hi})
     pd.DataFrame(strat_rows).to_csv(anal_dir / "stratified_tool_subset.csv", index=False)
+
+# exploratory B_prime_E comparisons (post-hoc)
+for label, results in exploratory_results.items():
+    if "status" in results:
+        continue
+    (anal_dir / f"exploratory_{label}.json").write_text(json.dumps({
+        "comparison": label,
+        **results,
+    }, indent=2))
+
+# verifier characterization (E and B_prime_E)
+if verifier_summaries:
+    (anal_dir / "verifier_characterization.json").write_text(json.dumps(verifier_summaries, indent=2))
 
 # cost / latency
 cost_df.to_csv(anal_dir / "cost_latency_table.csv", index=False)
@@ -433,23 +581,34 @@ for cond, df in dfs.items():
     base = base.merge(df[["id"] + list(cols.keys())].rename(columns=cols), on="id", how="left")
 base.to_csv(anal_dir / "paired_rows.csv", index=False)
 
-# condition E reconciliation table + verifier summary
-if "E" in dfs and "B" in dfs:
-    e = dfs["E"].copy()
-    b_correct = dict(zip(dfs["B"]["id"], dfs["B"]["correct"]))
-    e["b_correct"]  = e["id"].map(b_correct)
-    e["flip_type"]  = "no_change"
-    e.loc[(~e["b_correct"]) & ( e["correct"]), "flip_type"] = "wrong_to_right"
-    e.loc[( e["b_correct"]) & (~e["correct"]), "flip_type"] = "right_to_wrong"
-    e[["id", "correct", "b_correct", "flip_type", "n_tool_calls"]].to_csv(
-        anal_dir / "condition_E_reconciliation.csv", index=False
-    )
-    (anal_dir / "condition_E_verifier_summary.json").write_text(
-        json.dumps(e["flip_type"].value_counts().to_dict(), indent=2)
+# Per-row flip reconciliation: each interwhen variant against its natural
+# baseline. E uses B (the no-verifier tools baseline); B_prime_E uses B_prime
+# (the forced-tool-use baseline). The flip_type tells you whether the
+# verifier helped, hurt, or did nothing for that vignette.
+for cond, baseline in [("E", "B"), ("B_prime_E", "B_prime")]:
+    if cond not in dfs or baseline not in dfs:
+        continue
+    sub = dfs[cond].copy()
+    base_correct = dict(zip(dfs[baseline]["id"], dfs[baseline]["correct"]))
+    sub["baseline_correct"] = sub["id"].map(base_correct)
+    sub["flip_type"] = "no_change"
+    sub.loc[(~sub["baseline_correct"]) & ( sub["correct"]), "flip_type"] = "wrong_to_right"
+    sub.loc[( sub["baseline_correct"]) & (~sub["correct"]), "flip_type"] = "right_to_wrong"
+    out_cols = ["id", "correct", "baseline_correct", "flip_type", "n_tool_calls"]
+    sub[out_cols].to_csv(anal_dir / f"condition_{cond}_reconciliation.csv", index=False)
+    (anal_dir / f"condition_{cond}_verifier_summary.json").write_text(
+        json.dumps({
+            "condition":    cond,
+            "baseline":     baseline,
+            **sub["flip_type"].value_counts().to_dict(),
+        }, indent=2)
     )
 
-print("  accuracy_table, primary_comparisons, secondary, per_category,")
-print("  cost_latency, tool_use_distribution, paired_rows, E_reconciliation")
+print("  accuracy_table, primary_comparisons, secondary_Bprime_vs_B,")
+print("  exploratory_BprimeE_vs_Bprime, exploratory_BprimeE_vs_E,")
+print("  per_category, cost_latency, tool_use_distribution, paired_rows,")
+print("  E_reconciliation, B_prime_E_reconciliation, verifier_characterization,")
+print("  stratified_tool_subset")
 
 # ── 5. Plots ──────────────────────────────────────────────────────────────────
 print("[5/9] plots...")
@@ -504,14 +663,22 @@ if apparatus_p.exists():
     app_df = pd.read_parquet(apparatus_p)
     app_df.to_csv(gates_dir / "apparatus_results.csv", index=False)
     app_acc = app_df["correct"].mean()
+    # Pre-registered gate is 81.9% ± 3pp (see TESTING.md §1 and
+    # notebooks/01_apparatus_validation.py:76-77). Use the two-sided band, not
+    # a one-sided >= at the target.
+    GATE_LO, GATE_HI = 0.789, 0.849
+    gate_passed = bool(GATE_LO <= app_acc <= GATE_HI)
     (gates_dir / "apparatus_gate.json").write_text(json.dumps({
         "apparatus_accuracy": float(app_acc),
         "apparatus_n":        int(len(app_df)),
         "target_accuracy":    0.819,
+        "tolerance_pp":       3.0,
+        "gate_lo":            GATE_LO,
+        "gate_hi":            GATE_HI,
         "delta_pp":           round((app_acc - 0.819) * 100, 2),
-        "gate_passed":        bool(app_acc >= 0.819),
+        "gate_passed":        gate_passed,
     }, indent=2))
-    print(f"  apparatus gate: {app_acc:.1%} vs target 81.9%  (passed: {app_acc >= 0.819})")
+    print(f"  apparatus gate: {app_acc:.1%} vs target 81.9% ± 3pp  (passed: {gate_passed})")
 else:
     (gates_dir / "apparatus_gate.json").write_text(json.dumps({"note": "apparatus_full not found"}))
     print("  WARNING: apparatus_full/rows.parquet not found")

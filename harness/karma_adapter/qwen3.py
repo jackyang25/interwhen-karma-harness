@@ -48,6 +48,9 @@ class Qwen3Response:
     raw_prompt: str
     raw_completion: str
     stop_reason: str
+    # Honest totals (summed across all model calls in this row).
+    # For A/B/C/B' these are pure Qwen3 vLLM usage.
+    # For the inline E adapter in 08_run_all these are extractor + Qwen3.
     prompt_tokens: int = 0
     completion_tokens: int = 0
     n_model_calls: int = 0
@@ -58,6 +61,18 @@ class Qwen3Response:
     # text-mode stores the full raw text in `raw_completion`, so this is
     # populated as a single-element list referring to the rolling prompt.
     raw_messages: list[dict[str, Any]] = field(default_factory=list)
+    # ── E-shape deployment-honest breakouts (zero for A/B/C/B') ───────────
+    # Extractor = Sonnet API call (billed by Anthropic).
+    # qwen3_*   = on-GPU vLLM inference (single condition E session, summed
+    #             across the tool-calling loop's vLLM calls).
+    extractor_prompt_tokens: int = 0
+    extractor_completion_tokens: int = 0
+    extractor_elapsed_s: float = 0.0
+    qwen3_prompt_tokens: int = 0
+    qwen3_completion_tokens: int = 0
+    qwen3_elapsed_s: float = 0.0
+    # Per-row structured record of every verifier intervention (E only).
+    violations_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Qwen3Adapter:
