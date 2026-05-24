@@ -404,6 +404,20 @@ if "B_prime" in dfs and "B" in dfs:
 # per-category accuracy
 cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
 
+# stratified analysis (tool-using subset)
+if "B" in dfs:
+    b_tool_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
+    strat_rows = []
+    for cond in ["A", "B", "C", "D_prime", "E"]:
+        if cond not in dfs:
+            continue
+        sub = dfs[cond][dfs[cond]["id"].isin(b_tool_ids)]
+        ci = wilson_ci(int(sub["correct"].sum()), len(sub))
+        strat_rows.append({"condition": cond, "n_subset": ci.n,
+                           "accuracy_on_subset": ci.accuracy,
+                           "ci_low": ci.lo, "ci_high": ci.hi})
+    pd.DataFrame(strat_rows).to_csv(anal_dir / "stratified_tool_subset.csv", index=False)
+
 # cost / latency
 cost_df.to_csv(anal_dir / "cost_latency_table.csv", index=False)
 
