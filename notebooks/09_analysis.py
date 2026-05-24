@@ -35,21 +35,16 @@ from harness.analysis import wilson_ci, mcnemar, bonferroni
 
 # COMMAND ----------
 
+# DBTITLE 1,Load all condition results
 RESULTS_DIR = Path("/dbfs/results")
 
 CONDITIONS = {
     "A":      "qwen3_condition_A_full",
-    "B":      "qwen3_condition_B_full",     # if you re-ran with instrumentation
-    "C":      "qwen3_condition_C_full",
+    "B":       "qwen3_condition_B_full",
+    "C":       "qwen3_condition_C_full",
     "D":       "qwen3_condition_D_full",
     "E":      "qwen3_condition_E_full",
     "B_prime": "qwen3_condition_B_prime_full",
-}
-
-# Fallback: if B wasn't re-run with instrumentation, fall back to the legacy
-# path. Cost/time columns will be missing for B in that case.
-LEGACY_FALLBACKS = {
-    "B": "qwen3_baseline_full",
 }
 
 # One-time migration: rename legacy D_prime dirs to D
@@ -64,10 +59,6 @@ for _old, _new in [
 dfs: dict[str, pd.DataFrame] = {}
 for cond, path in CONDITIONS.items():
     full_path = RESULTS_DIR / path / "rows.parquet"
-    if not full_path.exists():
-        fallback = LEGACY_FALLBACKS.get(cond)
-        if fallback:
-            full_path = RESULTS_DIR / fallback / "rows.parquet"
     if full_path.exists():
         dfs[cond] = pd.read_parquet(full_path)
         print(f"{cond}: loaded {len(dfs[cond])} rows from {full_path}")
@@ -228,9 +219,12 @@ display(cost_df)  # noqa: F821
 
 # COMMAND ----------
 
+# DBTITLE 1,Pareto plot
 # MAGIC %md
-# MAGIC Quick Pareto plot — accuracy vs cost-proxy (total tokens). Conditions in
-# MAGIC the upper-left are the deployment sweet spots.
+# MAGIC ## 6.1 Pareto plot
+# MAGIC
+# MAGIC Accuracy vs cost-proxy (total tokens). Conditions in the upper-left are
+# MAGIC the deployment sweet spots.
 
 # COMMAND ----------
 
@@ -291,9 +285,6 @@ if "E" in dfs:
 import hashlib, json, shutil, subprocess, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
 
 REPO    = Path("/Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness")
 OUT     = Path("/tmp/karma_export")
@@ -315,10 +306,6 @@ def git_sha(repo):
         ).decode().strip()
     except Exception:
         return "unavailable"
-
-def read_safe(p):
-    try: return Path(p).read_text()
-    except Exception as e: return f"[unavailable: {e}]"
 
 # ── 1. Provenance ─────────────────────────────────────────────────────────────
 prov_dir = OUT / "provenance"
@@ -396,8 +383,7 @@ primary_df.to_csv(anal_dir / "primary_comparisons.csv")
 # secondary B' vs B
 if "B_prime" in dfs and "B" in dfs:
     x, y = paired_correctness(dfs["B_prime"], dfs["B"])
-    from harness.analysis import mcnemar as _mc
-    _res = _mc(x, y)
+    _res = mcnemar(x, y)
     (anal_dir / "secondary_Bprime_vs_B.json").write_text(json.dumps({
         "comparison":           "B_prime_vs_B",
         "n_paired":             int(len(x)),
@@ -470,18 +456,7 @@ print("[5/9] plots...")
 plots_dir = OUT / "plots"
 plots_dir.mkdir()
 
-# Pareto
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_df = cost_df.dropna(subset=["accuracy", "mean_total_tokens"])
-ax.scatter(plot_df["mean_total_tokens"], plot_df["accuracy"], s=80)
-for _, r in plot_df.iterrows():
-    ax.annotate(r["condition"], (r["mean_total_tokens"], r["accuracy"]),
-                xytext=(5, 5), textcoords="offset points")
-ax.set_xlabel("Mean total tokens per vignette (cost proxy)")
-ax.set_ylabel("Accuracy")
-ax.set_title("Cost / accuracy Pareto frontier — LMIC deployment view")
-ax.grid(True, alpha=0.3)
-plt.tight_layout()
+# Pareto — reuse figure from Cell 17 (still in scope, plt.show() doesn't close it)
 fig.savefig(plots_dir / "pareto.png", dpi=150)
 plt.close(fig)
 
@@ -524,7 +499,7 @@ else:
 print("[8/9] study gates...")
 gates_dir = OUT / "study_gates"
 gates_dir.mkdir()
-apparatus_p = Path("/dbfs/results/apparatus_full/rows.parquet")
+apparatus_p = RESULTS_DIR / "apparatus_full/rows.parquet"
 if apparatus_p.exists():
     app_df = pd.read_parquet(apparatus_p)
     app_df.to_csv(gates_dir / "apparatus_results.csv", index=False)
@@ -551,7 +526,7 @@ for f in sorted(OUT.rglob("*")):
 (OUT / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
 print(f"  {len(manifest)} files indexed")
 
-# ── Zip + copy to DBFS ───────────────────────────────────────────────────────
+# ── Zip to /tmp (next cell copies to UC Volume) ───────────────────────────────────────────────────────
 zip_path = Path("/tmp/karma_export.zip")
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
     for f in OUT.rglob("*"):
@@ -559,8 +534,19 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(f, f.relative_to(OUT.parent))
 
 size_mb = zip_path.stat().st_size / 1024 / 1024
-print(f"\nZip: {size_mb:.1f} MB")
+print(f"\nDone. Zip: {size_mb:.1f} MB — run next cell to copy to UC Volume for download.")
 
-dbutils.fs.cp(f"file:{zip_path}", "dbfs:/results/karma_export.zip")  # noqa: F821
-print("Package ready at: dbfs:/results/karma_export.zip")
-print("Download:  databricks fs cp dbfs:/results/karma_export.zip .")
+# COMMAND ----------
+
+# DBTITLE 1,Download links (click to save to your computer)
+# Create volume if needed, copy zip there.
+# idm_main.default is the only schema writable without admin grants.
+spark.sql("CREATE VOLUME IF NOT EXISTS idm_main.default.karma_results")  # noqa: F821
+
+src = Path("/tmp/karma_export.zip")
+dst = Path("/Volumes/idm_main/default/karma_results/karma_export.zip")
+shutil.copy(src, dst)
+
+size_mb = dst.stat().st_size / 1024 / 1024
+print(f"Done! {size_mb:.1f} MB")
+print("\nCatalog Explorer → idm_main → default → karma_results → karma_export.zip → right-click → Download")

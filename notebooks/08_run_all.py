@@ -1,4 +1,5 @@
 # Databricks notebook source
+# DBTITLE 1,08 — Orchestrator
 # MAGIC %md
 # MAGIC # 08 — Orchestrator: run all conditions, aggregate, report
 # MAGIC
@@ -195,13 +196,14 @@ server.wait_ready(timeout=900)
 # COMMAND ----------
 
 # DBTITLE 1,Cell 14
-CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E"]  # all conditions in dependency order
+CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E"]  # all conditions
 FORCE_RERUN = False        # skip conditions with existing summary.json (idempotent)
 BACKUP_LEGACY = True       # move any existing parquet to _backup_<ts>/ before a fresh run
 
 # COMMAND ----------
 
-# MAGIC %md ## 5. Define the orchestration helpers
+# DBTITLE 1,Infrastructure
+# MAGIC %md ## 5. Infrastructure
 
 # COMMAND ----------
 
@@ -215,7 +217,7 @@ from harness.karma_adapter.qwen3 import Qwen3Adapter
 from harness.runner import run_eval
 from harness.analysis import wilson_ci
 
-REPO_ROOT = pathlib.Path("/Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness")
+REPO_ROOT    = Path("/Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness")
 RESULTS_ROOT = Path("/dbfs/results")
 RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -233,14 +235,22 @@ WORKERS = {
 PILOT_N = 10
 
 
+# ── Condition routing ───────────────────────────────────────────────────────────────────
+
 def _system_for(cond: str) -> str | None:
-    """Return the locked system prompt for the condition, or None for DEFAULT_SYSTEM."""
+    """Return the locked system prompt for the condition, or None for no system prompt.
+
+    None → adapter.run(system=None) → no system message in the chatml prompt.
+    B' and C use custom prompts that replace the default entirely.
+    A, B, D, E run without a system prompt (confinement_instruction in the user
+    turn is sufficient for JSON output).
+    """
     mapping = {
-        "A":       None,    # use DEFAULT_SYSTEM
+        "A":       None,    # no system prompt
         "B":       None,
         "B_prime": REPO_ROOT / "conf/prompts/condition_b_prime.txt",
         "C":       REPO_ROOT / "conf/prompts/condition_c.txt",
-        "D": None,    # primary uses DEFAULT_SYSTEM; verifier has its own prompt
+        "D":       None,    # no system prompt; verifier has its own prompt
         "E":       None,
     }
     p = mapping.get(cond)
@@ -408,6 +418,8 @@ def _build_adapter(cond: str):
     raise ValueError(f"Unknown condition: {cond}")
 
 
+# ── Orchestration helpers ───────────────────────────────────────────────────────────────
+
 def _out_dir(cond: str, kind: str) -> Path:
     return RESULTS_ROOT / f"qwen3_condition_{cond}_{kind}"
 
@@ -460,7 +472,7 @@ def run_condition(cond: str) -> dict:
         system = _system_for(cond)
         pilot = run_eval(
             adapter, n=PILOT_N, max_workers=WORKERS[cond],
-            system=system if system else None,
+            system=system,
             out_dir=str(_out_dir(cond, "pilot")),
         )
         record["pilot"] = {
@@ -470,11 +482,15 @@ def run_condition(cond: str) -> dict:
             "mean_tool_calls": float(pilot.rows["n_tool_calls"].mean()),
         }
         print(f"[{cond}] pilot acc={pilot.accuracy:.1%}, tool_calls/vignette={record['pilot']['mean_tool_calls']:.2f}")
+        if pilot.accuracy == 0.0:
+            print(f"[{cond}] WARNING: pilot accuracy is 0% — check adapter before full run. Proceeding anyway.")
+        if cond != "A" and record["pilot"]["mean_tool_calls"] == 0.0:
+            print(f"[{cond}] WARNING: pilot used 0 tool calls — tool dispatch may be broken.")
 
         print(f"[{cond}] FULL (n=1066, workers={WORKERS[cond]})")
         full = run_eval(
             adapter, n=None, max_workers=WORKERS[cond],
-            system=system if system else None,
+            system=system,
             out_dir=str(_out_dir(cond, "full")),
         )
         ci = wilson_ci(full.n_correct, full.n)
@@ -519,7 +535,7 @@ _adapter_e = _build_adapter("E")
 _system_e  = _system_for("E")
 
 for i in range(3):
-    _vignette = _ds[i]["question"]
+    _vignette = _ds[i]["question_text"]
     _resp = _adapter_e.run(_vignette, system=_system_e)
     _m = _adapter_e._last_monitor.metrics
     print(f"\n--- vignette {i} ---")
@@ -542,6 +558,7 @@ print("\nSmoke test done. If n_tool_calls > 0 and tool_response is True on any v
 
 # COMMAND ----------
 
+# DBTITLE 1,Run all conditions
 run_records: list[dict] = []
 for cond in CONDITIONS_TO_RUN:
     print("=" * 60)
@@ -582,6 +599,7 @@ print("\nNext: open 09_analysis and run all cells for the full analysis + export
 
 # COMMAND ----------
 
+# DBTITLE 1,Stop vLLM server
 server.stop()
 print("server stopped:", not server.is_alive())
-print("\nDone. Inspect /dbfs/results/_AGGREGATED_RESULTS.json for the full summary.")
+print(f"\nDone. Results at: {RESULTS_ROOT}")
