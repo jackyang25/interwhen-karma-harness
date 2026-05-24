@@ -10,8 +10,8 @@ venv/
 # Notebooks
 .ipynb_checkpoints/
 
-# Experiment outputs — store in DBFS/Unity Catalog/object storage, not git
-results/
+# Experiment outputs — large artifacts go to DBFS/object storage; small bundles
+# (summaries, manifests, per-row parquets) are committed under results/.
 *.duckdb
 cache.db
 **/cache.db

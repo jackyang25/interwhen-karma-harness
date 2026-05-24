@@ -1,0 +1,14 @@
+{
+  "exported_at": "2026-05-24T07:22:18.893475+00:00",
+  "harness_git_sha": "unavailable",
+  "interwhen_git_sha": "2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e",
+  "dbr_version": "17.3.x-gpu-ml-scala2.13",
+  "cluster_name": "IDM-H100GPU-Compute_1",
+  "gpu_type": "Standard_NC40ads_H100_v5 (H100 80GB, Azure)",
+  "model_id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+  "extractor_model_E": "claude-sonnet-4-6",
+  "dataset": "ekacare/medical_calculator_eval",
+  "dataset_split": "test",
+  "n_vignettes": 1066,
+  "run_records": []
+}
