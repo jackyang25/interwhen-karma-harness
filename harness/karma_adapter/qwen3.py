@@ -51,6 +51,9 @@ class Qwen3Response:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     n_model_calls: int = 0
+    # Condition-E verifier instrumentation. Zero for all other conditions.
+    n_verifier_fires: int = 0   # tool calls where ClinicalInputMonitor found violations
+    n_fixes_applied: int = 0    # prompt rewrites (feedback injections + malformed recoveries)
     # Field kept for compatibility with the old chat-completions adapter shape;
     # text-mode stores the full raw text in `raw_completion`, so this is
     # populated as a single-element list referring to the rolling prompt.

@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 06 — Qwen3 Condition D' (post-hoc verifier)
+# MAGIC # 06 — Qwen3 Condition D (post-hoc verifier)
 # MAGIC
 # MAGIC Runs Qwen3-30B-A3B-Thinking-2507 + MedAI tools with a **post-hoc
 # MAGIC verifier**: after Qwen3 produces an answer, a separate Sonnet-4.6
@@ -10,7 +10,7 @@
 # MAGIC Locked design (TESTING.md §6, pre_registration.md):
 # MAGIC - Verifier model: **Claude Sonnet 4.6** (different from Qwen3 → no
 # MAGIC   self-agreement bias)
-# MAGIC - Verifier prompt: `conf/prompts/condition_d_prime.txt`
+# MAGIC - Verifier prompt: `conf/prompts/condition_d.txt`
 # MAGIC - Revision policy: **one revision attempt** on flag
 # MAGIC - Trigger: every primary answer (no skip)
 # MAGIC
@@ -177,14 +177,14 @@ from harness.verifier import PostHocVerifierAdapter
 primary = Qwen3Adapter(base_url=server.base_url, use_tools=True)
 adapter = PostHocVerifierAdapter(
     primary=primary,
-    verifier_prompt_path=str(_repo_root / "conf/prompts/condition_d_prime.txt"),
+    verifier_prompt_path=str(_repo_root / "conf/prompts/condition_d.txt"),
     verifier_model="claude-sonnet-4-6",
 )
-print("D' adapter wired (Qwen3 primary + Sonnet post-hoc verifier).")
+print("D adapter wired (Qwen3 primary + Sonnet post-hoc verifier).")
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Pilot — 10 vignettes with D' workflow
+# MAGIC %md ## 7. Pilot — 10 vignettes with D workflow
 # MAGIC
 # MAGIC Sanity check: each vignette runs Qwen3 → Sonnet verifier → (revise if
 # MAGIC flagged). Expect at least a few verifier flags on n=10 if the verifier
@@ -200,9 +200,9 @@ pilot = run_eval(
     adapter,
     n=10,
     max_workers=4,
-    # D' uses DEFAULT_SYSTEM (same as B) — the intervention is the verifier
+    # D uses DEFAULT_SYSTEM (same as B) — the intervention is the verifier
     # wrapping, not a different prompt.
-    out_dir="/dbfs/results/qwen3_condition_D_prime_pilot/",
+    out_dir="/dbfs/results/qwen3_condition_D_pilot/",
 )
 print(f"Pilot accuracy: {pilot.accuracy:.1%} ({pilot.n_correct}/{pilot.n})")
 print(f"Parse failures: {pilot.n_parse_failures}")
@@ -215,11 +215,11 @@ display(pilot.rows[["id", "primary_field", "expected", "predicted", "correct", "
 
 # COMMAND ----------
 
-# MAGIC %md ## 8. Full 1,066-row Condition D'
+# MAGIC %md ## 8. Full 1,066-row Condition D
 
 # COMMAND ----------
 
-# max_workers=32: D' adds an extra Sonnet API call per vignette (and maybe a
+# max_workers=32: D adds an extra Sonnet API call per vignette (and maybe a
 # revision = another Qwen3 call). Anthropic enterprise rate limits are
 # generous but contention with Qwen3 GPU + tool MCP at 64 workers gets noisy.
 # 32 keeps the pipeline balanced.
@@ -227,10 +227,10 @@ full = run_eval(
     adapter,
     n=None,
     max_workers=32,
-    out_dir="/dbfs/results/qwen3_condition_D_prime_full/",
+    out_dir="/dbfs/results/qwen3_condition_D_full/",
 )
 ci = wilson_ci(full.n_correct, full.n)
-print(f"Condition D' (post-hoc verifier) accuracy: {ci}")
+print(f"Condition D (post-hoc verifier) accuracy: {ci}")
 print()
 print("--- Cost / time (LMIC deployment proxies) ---")
 print(f"Total wall-clock for full run: {full.total_run_seconds/60:.1f} min")

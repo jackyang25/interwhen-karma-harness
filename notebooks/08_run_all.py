@@ -24,7 +24,7 @@
 # MAGIC 2. B (tools)
 # MAGIC 3. B' (force tool use, secondary)
 # MAGIC 4. C (best-effort prompt verification)
-# MAGIC 5. D' (post-hoc Sonnet verifier)
+# MAGIC 5. D (post-hoc Sonnet verifier)
 # MAGIC 6. E (literal interwhen + semantic verifier)
 # MAGIC
 # MAGIC **Before clicking Run All:**
@@ -194,9 +194,10 @@ server.wait_ready(timeout=900)
 
 # COMMAND ----------
 
-CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D_prime", "E"]
-FORCE_RERUN = False        # True = re-run even if summary.json exists
-BACKUP_LEGACY = True       # True = preserve any existing rows.parquet under _backup_<ts>/
+# DBTITLE 1,Cell 14
+CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E"]  # all conditions in dependency order
+FORCE_RERUN = False        # skip conditions with existing summary.json (idempotent)
+BACKUP_LEGACY = True       # move any existing parquet to _backup_<ts>/ before a fresh run
 
 # COMMAND ----------
 
@@ -204,6 +205,7 @@ BACKUP_LEGACY = True       # True = preserve any existing rows.parquet under _ba
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 16
 import json
 import time
 import traceback
@@ -224,8 +226,8 @@ WORKERS = {
     "B":        64,
     "B_prime":  64,
     "C":        64,
-    "D_prime":  32,   # adds a Sonnet verifier call per vignette
-    "E":        16,   # adds extractor + interwhen streaming + potential retries
+    "D":        32,   # adds a Sonnet verifier call per vignette
+    "E":        32,   # extractor (async Sonnet) + verified tool loop + potential verifier re-prompts
 }
 
 PILOT_N = 10
@@ -238,7 +240,7 @@ def _system_for(cond: str) -> str | None:
         "B":       None,
         "B_prime": REPO_ROOT / "conf/prompts/condition_b_prime.txt",
         "C":       REPO_ROOT / "conf/prompts/condition_c.txt",
-        "D_prime": None,    # primary uses DEFAULT_SYSTEM; verifier has its own prompt
+        "D": None,    # primary uses DEFAULT_SYSTEM; verifier has its own prompt
         "E":       None,
     }
     p = mapping.get(cond)
@@ -252,39 +254,62 @@ def _build_adapter(cond: str):
             base_url=server.base_url,
             use_tools=(cond != "A"),
         )
-    if cond == "D_prime":
+    if cond == "D":
         from harness.verifier import PostHocVerifierAdapter
         primary = Qwen3Adapter(base_url=server.base_url, use_tools=True)
         return PostHocVerifierAdapter(
             primary=primary,
-            verifier_prompt_path=str(REPO_ROOT / "conf/prompts/condition_d_prime.txt"),
+            verifier_prompt_path=str(REPO_ROOT / "conf/prompts/condition_d.txt"),
             verifier_model="claude-sonnet-4-6",
         )
     if cond == "E":
-        # Defer to the notebook 07 adapter pattern via a small inline class.
-        # We construct it here to avoid coupling on import order.
+        # Condition E: Qwen3 tool-calling loop with ClinicalInputMonitor intercept.
+        #
+        # Architecture (mirrors Qwen3Adapter.run() exactly, adds one step):
+        #   1. Call /v1/completions, stop at </tool_call>
+        #   2. If no tool call → return final answer
+        #   3. If tool call → run ClinicalInputMonitor.fix():
+        #        violations found  → inject feedback into prompt, re-generate (no MCP call)
+        #        no violations     → dispatch MCP tool, inject real tool_response, continue
+        #        malformed JSON    → inject correction request, re-generate
+        #   4. Loop until final answer or MAX_TOOL_TURNS exhausted
+        #
+        # This replaces the previous stream_completion approach which bypassed
+        # the tool-calling loop entirely and never dispatched MCP tools.
         from harness.extraction import FactExtractor
         from harness.monitors import ClinicalInputMonitor
         from harness.karma_adapter.mcp_tools import fetch_tool_schemas
+        from harness.karma_adapter.qwen3 import Qwen3Response
         from transformers import AutoTokenizer
-        from interwhen import stream_completion
+        from openai import OpenAI
         import asyncio, re
         import nest_asyncio
         nest_asyncio.apply()
 
-        extractor = FactExtractor(
+        _MODEL_ID   = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+        _MAX_TURNS  = 10
+        _THINK_RE   = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+        extractor         = FactExtractor(
             prompt_path=str(REPO_ROOT / "conf/prompts/extractor.txt"),
             model="claude-sonnet-4-6",
         )
         feedback_template = (REPO_ROOT / "conf/prompts/condition_e_feedback.txt").read_text()
-        tools = fetch_tool_schemas()
-        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-30B-A3B-Thinking-2507")
-        completions_url = f"{server.base_url}/completions"
-        _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+        tools             = fetch_tool_schemas()
+        tokenizer         = AutoTokenizer.from_pretrained(_MODEL_ID)
+        client            = OpenAI(base_url=server.base_url, api_key="EMPTY")
 
-        class _Adapter:
+        class _VerifiedAdapter:
+            """Qwen3 completions loop with per-tool-call semantic verification."""
+
+            def __init__(self):
+                self._last_monitor = None   # populated after each run(); inspect for smoke tests
+
             def run(self, prompt, system=None):
+                # ── 1. Extract patient facts (Sonnet, deterministic) ──────────────
                 facts = extractor.extract(prompt)
+
+                # ── 2. Render prompt with MCP tool schemas ────────────────────────
                 messages = []
                 if system:
                     messages.append({"role": "system", "content": system})
@@ -292,43 +317,94 @@ def _build_adapter(cond: str):
                 rendered = tokenizer.apply_chat_template(
                     messages, tools=tools, add_generation_prompt=True, tokenize=False,
                 )
-                monitor = ClinicalInputMonitor(patient_facts=facts, feedback_template=feedback_template)
-                llm_server = {
-                    "url": completions_url,
-                    "headers": {"Content-Type": "application/json"},
-                    "payload": {
-                        "model": "Qwen/Qwen3-30B-A3B-Thinking-2507",
-                        "max_tokens": 4096,
-                        "temperature": 0.0,
-                        "stream": True,
-                    },
-                }
-                loop = asyncio.get_event_loop()
-                generated = loop.run_until_complete(
-                    stream_completion(
-                        prompt=rendered, prev_text="",
-                        llm_server=llm_server, monitors=[monitor],
-                        async_execution=True,
-                    )
-                )
-                text = generated
-                if "<|im_start|>assistant" in text:
-                    text = text.rsplit("<|im_start|>assistant", 1)[-1]
-                text = text.split("<|im_end|>", 1)[0]
-                text = _THINK_RE.sub("", text).strip()
 
-                from harness.karma_adapter.qwen3 import Qwen3Response
+                # ── 3. Per-vignette monitor (stateful; one per run() call) ─────────
+                monitor = ClinicalInputMonitor(
+                    patient_facts=facts,
+                    feedback_template=feedback_template,
+                )
+                self._last_monitor = monitor
+                loop = asyncio.get_event_loop()
+
+                n_tool_calls    = 0     # successful MCP dispatches
+                n_model_calls   = 0     # LLM calls (>tool_calls when verifier fires)
+                prompt_tokens   = facts.prompt_tokens
+                completion_tokens = facts.completion_tokens
+                rolling_prompt  = rendered
+
+                # ── 4. Tool-calling loop ──────────────────────────────────────────
+                for _ in range(_MAX_TURNS + 1):
+                    resp = client.completions.create(
+                        model=_MODEL_ID,
+                        prompt=rolling_prompt,
+                        max_tokens=4096,
+                        temperature=0.0,
+                        top_p=1.0,
+                        stop=["</tool_call>"],
+                    )
+                    n_model_calls += 1
+                    if resp.usage is not None:
+                        prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
+                        completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
+
+                    choice    = resp.choices[0]
+                    generated = choice.text or ""
+
+                    # vLLM strips the stop string; re-attach so regex sees full block.
+                    if (choice.finish_reason == "stop"
+                            and "<tool_call>" in generated
+                            and "</tool_call>" not in generated):
+                        generated += "</tool_call>"
+
+                    rolling_prompt += generated
+
+                    # No tool call → final answer.
+                    if "<tool_call>" not in generated:
+                        break
+
+                    # ── Tool call detected: verify then dispatch or inject feedback ──
+                    monitor.metrics.n_steps_seen += 1
+                    event_info: dict = {}
+                    loop.run_until_complete(monitor.verify(
+                        chunk=generated,
+                        token_index=0,
+                        event=asyncio.Event(),  # signal not needed; event_info carries results
+                        event_info=event_info,
+                    ))
+
+                    # fix() returns the new rolling_prompt:
+                    #   violations → feedback injected, no MCP call
+                    #   clean call  → MCP dispatched, tool_response injected
+                    #   malformed   → correction request injected
+                    rolling_prompt = loop.run_until_complete(
+                        monitor.fix(rolling_prompt, event_info)
+                    )
+
+                    # Count only real MCP dispatches (no violations, not malformed).
+                    if not event_info.get("violations") and not event_info.get("malformed"):
+                        n_tool_calls += 1
+
+                # ── 5. Extract final answer text ──────────────────────────────────
+                tail = rolling_prompt[len(rendered):]
+                if "<|im_start|>assistant" in tail:
+                    tail = tail.rsplit("<|im_start|>assistant", 1)[-1]
+                tail = tail.split("<|im_end|>", 1)[0]
+                text = _THINK_RE.sub("", tail).strip()
+
                 return Qwen3Response(
                     text=text,
-                    n_tool_calls=monitor.metrics.n_steps_seen,
+                    n_tool_calls=n_tool_calls,
                     raw_prompt=rendered,
-                    raw_completion=generated,
+                    raw_completion=rolling_prompt[len(rendered):],
                     stop_reason="stop",
-                    prompt_tokens=facts.prompt_tokens,
-                    completion_tokens=facts.completion_tokens,
-                    n_model_calls=1,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    n_model_calls=n_model_calls,
+                    n_verifier_fires=monitor.metrics.n_verifier_fires,
+                    n_fixes_applied=monitor.metrics.n_fixes_applied,
                 )
-        return _Adapter()
+
+        return _VerifiedAdapter()
     raise ValueError(f"Unknown condition: {cond}")
 
 
@@ -425,6 +501,40 @@ def run_condition(cond: str) -> dict:
     record["ended_at"] = time.time()
     return record
 
+
+# COMMAND ----------
+
+# DBTITLE 1,Smoke-test E adapter (run before full job)
+# Run this cell BEFORE Cell 18 to verify the E adapter mechanics work.
+# Checks:
+#   n_tool_calls > 0   → MCP tools are actually being dispatched
+#   n_model_calls      → > n_tool_calls means verifier fired at least once
+#   n_verifier_fires   → how many tool calls had violations
+#   raw_completion     → should contain <tool_response> blocks (not phantom tool calls)
+
+from datasets import load_dataset as _lds
+
+_ds = _lds("ekacare/medical_calculator_eval", split="test")
+_adapter_e = _build_adapter("E")
+_system_e  = _system_for("E")
+
+for i in range(3):
+    _vignette = _ds[i]["question"]
+    _resp = _adapter_e.run(_vignette, system=_system_e)
+    _m = _adapter_e._last_monitor.metrics
+    print(f"\n--- vignette {i} ---")
+    print(f"  n_model_calls   : {_resp.n_model_calls}")
+    print(f"  n_tool_calls    : {_resp.n_tool_calls}   (MCP dispatches)")
+    print(f"  n_steps_seen    : {_m.n_steps_seen}    (tool_call blocks detected by verifier)")
+    print(f"  n_verifier_fires: {_m.n_verifier_fires} (violations found)")
+    print(f"  n_fixes_applied : {_m.n_fixes_applied}  (prompt rewrites)")
+    print(f"  answer text     : {_resp.text[:120]}")
+    has_response = "<tool_response>" in _resp.raw_completion
+    print(f"  tool_response in raw_completion: {has_response}  (✓ real dispatch if True)")
+    if _m.violations_history:
+        print(f"  violations_history[0]: {_m.violations_history[0]}")
+
+print("\nSmoke test done. If n_tool_calls > 0 and tool_response is True on any vignette, the adapter is wired correctly.")
 
 # COMMAND ----------
 

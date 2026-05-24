@@ -2,14 +2,14 @@
 # MAGIC %md
 # MAGIC # 09 — Cross-condition analysis
 # MAGIC
-# MAGIC Loads the per-row parquets from each condition (A, B, C, D', E, B') and
+# MAGIC Loads the per-row parquets from each condition (A, B, C, D, E, B') and
 # MAGIC runs the §7 statistical plan:
 # MAGIC
 # MAGIC **Primary (Bonferroni family, α = 0.05 / 4 = 0.0125):**
 # MAGIC - B vs A — Did tools help?
 # MAGIC - E vs B — Did verification beat tool access alone? (foundational)
 # MAGIC - E vs C — Did verification beat best-effort prompt?
-# MAGIC - E vs D' — Did mid-stream beat post-hoc verifier?
+# MAGIC - E vs D — Did mid-stream beat post-hoc verifier?
 # MAGIC
 # MAGIC **Secondary (exploratory, uncorrected α = 0.05):**
 # MAGIC - B' vs B — Did forced tool use close the underuse gap?
@@ -41,7 +41,7 @@ CONDITIONS = {
     "A":      "qwen3_condition_A_full",
     "B":      "qwen3_condition_B_full",     # if you re-ran with instrumentation
     "C":      "qwen3_condition_C_full",
-    "D_prime": "qwen3_condition_D_prime_full",
+    "D":       "qwen3_condition_D_full",
     "E":      "qwen3_condition_E_full",
     "B_prime": "qwen3_condition_B_prime_full",
 }
@@ -51,6 +51,15 @@ CONDITIONS = {
 LEGACY_FALLBACKS = {
     "B": "qwen3_baseline_full",
 }
+
+# One-time migration: rename legacy D_prime dirs to D
+for _old, _new in [
+    ("qwen3_condition_D_prime_full",  "qwen3_condition_D_full"),
+    ("qwen3_condition_D_prime_pilot", "qwen3_condition_D_pilot"),
+]:
+    if (RESULTS_DIR / _old).exists() and not (RESULTS_DIR / _new).exists():
+        (RESULTS_DIR / _old).rename(RESULTS_DIR / _new)
+        print(f"Migrated {_old} \u2192 {_new}")
 
 dfs: dict[str, pd.DataFrame] = {}
 for cond, path in CONDITIONS.items():
@@ -113,7 +122,7 @@ for label, (left, right) in {
     "B_vs_A": ("B", "A"),
     "E_vs_B": ("E", "B"),
     "E_vs_C": ("E", "C"),
-    "E_vs_Dprime": ("E", "D_prime"),
+    "E_vs_D": ("E", "D"),
 }.items():
     if left not in dfs or right not in dfs:
         primary_results[label] = {"status": "missing condition data"}
@@ -167,7 +176,7 @@ else:
 
 # MAGIC %md ## 5. Stratified analysis — effect on the tool-using subset
 # MAGIC
-# MAGIC The primary input-verification interventions (C, D', E) can only act on
+# MAGIC The primary input-verification interventions (C, D, E) can only act on
 # MAGIC rows where the baseline (B) used at least one tool. Reporting verifier
 # MAGIC effect on this subset is the honest reading of the hypothesis.
 
@@ -178,7 +187,7 @@ if "B" in dfs:
     print(f"Tool-using subset (B): {len(b_tool_using_ids)} / {len(dfs['B'])} rows")
 
     sub_rows = []
-    for cond in ["A", "B", "C", "D_prime", "E"]:
+    for cond in ["A", "B", "C", "D", "E"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_using_ids)]
@@ -408,7 +417,7 @@ cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
 if "B" in dfs:
     b_tool_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
     strat_rows = []
-    for cond in ["A", "B", "C", "D_prime", "E"]:
+    for cond in ["A", "B", "C", "D", "E"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_ids)]
