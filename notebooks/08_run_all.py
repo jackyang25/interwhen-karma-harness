@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 09 — Orchestrator: run all conditions, aggregate, report
+# MAGIC # 08 — Orchestrator: run all conditions, aggregate, report
 # MAGIC
 # MAGIC Single notebook to click before going to bed. Runs every Qwen3 condition
 # MAGIC against one vLLM server, recovers from per-condition errors, and at the
@@ -455,140 +455,19 @@ for r in run_records:
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Aggregated cross-condition analysis
+# MAGIC %md ## 7. Save run records
 
 # COMMAND ----------
 
-import pandas as pd
-import numpy as np
-from harness.analysis import mcnemar, bonferroni
-
-# Load every available per-row parquet.
-RESULT_DIRS = {cond: _out_dir(cond, "full") for cond in ["A", "B", "B_prime", "C", "D_prime", "E"]}
-dfs = {}
-for cond, d in RESULT_DIRS.items():
-    p = d / "rows.parquet"
-    if p.exists():
-        dfs[cond] = pd.read_parquet(p)
-        print(f"loaded {cond}: {len(dfs[cond])} rows")
-    else:
-        print(f"{cond}: no parquet yet")
-
-# Per-condition accuracy table
-acc_rows = []
-for cond, df in dfs.items():
-    ci = wilson_ci(int(df["correct"].sum()), len(df))
-    row = {
-        "condition": cond,
-        "n": ci.n,
-        "n_correct": int(df["correct"].sum()),
-        "accuracy": round(ci.accuracy, 4),
-        "ci_low": round(ci.lo, 4),
-        "ci_high": round(ci.hi, 4),
-        "parse_failures": int(df["parse_failed"].sum()),
-        "mean_tool_calls": round(df["n_tool_calls"].mean(), 3),
-    }
-    if "elapsed_seconds" in df.columns:
-        row["median_latency_s"] = round(df["elapsed_seconds"].median(), 2)
-    if "total_tokens" in df.columns:
-        row["mean_total_tokens"] = round(df["total_tokens"].mean(), 0)
-    acc_rows.append(row)
-accuracy_table = pd.DataFrame(acc_rows)
-print("\nPer-condition accuracy:")
-display(accuracy_table)  # noqa: F821
-
-# Paired McNemar comparisons
-def _paired(a, b):
-    m = dfs[a][["id", "correct"]].rename(columns={"correct": "x"}).merge(
-        dfs[b][["id", "correct"]].rename(columns={"correct": "y"}),
-        on="id",
-    )
-    return m["x"].to_numpy(), m["y"].to_numpy()
-
-primary_pairs = {
-    "B_vs_A":      ("B", "A"),
-    "E_vs_B":      ("E", "B"),
-    "E_vs_C":      ("E", "C"),
-    "E_vs_Dprime": ("E", "D_prime"),
-}
-
-uncorrected = {}
-mc_rows = []
-for label, (a, b) in primary_pairs.items():
-    if a not in dfs or b not in dfs:
-        mc_rows.append({"comparison": label, "status": "missing data"})
-        continue
-    x, y = _paired(a, b)
-    res = mcnemar(x, y)
-    uncorrected[label] = res.pvalue
-    mc_rows.append({
-        "comparison": label,
-        "n_paired": len(x),
-        "acc_left": round(float(x.mean()), 4),
-        "acc_right": round(float(y.mean()), 4),
-        "delta_pp": round(float((x.mean() - y.mean()) * 100), 2),
-        "b": res.b, "c": res.c,
-        "uncorrected_p": round(res.pvalue, 5),
-    })
-
-bonf = bonferroni(uncorrected, n_tests=4)
-for row in mc_rows:
-    if "uncorrected_p" in row:
-        row["bonferroni_p"] = round(bonf.get(row["comparison"], 1.0), 5)
-        row["significant_at_0.05"] = row["bonferroni_p"] < 0.05
-print("\nPrimary comparisons (Bonferroni-corrected, n=4):")
-display(pd.DataFrame(mc_rows))  # noqa: F821
-
-# Secondary (B' vs B, uncorrected)
-if "B_prime" in dfs and "B" in dfs:
-    x, y = _paired("B_prime", "B")
-    res = mcnemar(x, y)
-    print("\nSecondary B' vs B (exploratory, uncorrected α=0.05):")
-    print(f"  n_paired={len(x)}  acc_B'={x.mean():.3f}  acc_B={y.mean():.3f}  delta={(x.mean()-y.mean())*100:+.2f}pp")
-    print(f"  McNemar b={res.b} c={res.c} p={res.pvalue:.5g}  (significant at 0.05: {res.pvalue < 0.05})")
-
-# COMMAND ----------
-
-# MAGIC %md ### Cost / accuracy Pareto (LMIC deployment lens)
-
-# COMMAND ----------
-
-import matplotlib.pyplot as plt
-
-cost_df = accuracy_table.copy()
-plot_df = cost_df.dropna(subset=["accuracy"])
-if "mean_total_tokens" in plot_df.columns:
-    plot_df = plot_df.dropna(subset=["mean_total_tokens"])
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.scatter(plot_df["mean_total_tokens"], plot_df["accuracy"], s=80)
-    for _, r in plot_df.iterrows():
-        ax.annotate(r["condition"], (r["mean_total_tokens"], r["accuracy"]),
-                    xytext=(5, 5), textcoords="offset points")
-    ax.set_xlabel("Mean total tokens per vignette (cost proxy)")
-    ax.set_ylabel("Accuracy")
-    ax.set_title("Cost / accuracy Pareto — LMIC deployment view")
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-# COMMAND ----------
-
-# MAGIC %md ### Save aggregated summary to /dbfs
-
-# COMMAND ----------
-
-aggregate_summary = {
-    "run_records": run_records,
-    "accuracy_table": accuracy_table.to_dict(orient="records"),
-    "primary_comparisons": mc_rows,
-    "completed_at": time.time(),
-}
+# DBTITLE 1,Cell 24
 out_path = RESULTS_ROOT / "_AGGREGATED_RESULTS.json"
-out_path.write_text(json.dumps(aggregate_summary, indent=2, default=str))
-print(f"Aggregated summary written to: {out_path}")
+out_path.write_text(json.dumps({"run_records": run_records, "completed_at": time.time()}, indent=2, default=str))
+print(f"Run records written to: {out_path}")
+print("\nNext: open 09_analysis and run all cells for the full analysis + export bundle.")
 
 # COMMAND ----------
 
+# DBTITLE 1,Cell 25
 # MAGIC %md ## 8. Cleanup
 
 # COMMAND ----------
