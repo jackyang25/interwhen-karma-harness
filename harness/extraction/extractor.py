@@ -55,12 +55,27 @@ class FactExtractor:
         self.client = anthropic.Anthropic(api_key=api_key or os.environ["ANTHROPIC_API_KEY"])
 
     def extract(self, vignette: str) -> PatientFacts:
+        """Extract using the system prompt set at construction time. Used by the
+        upfront-extraction architecture in E and B_prime_E (one call per vignette)."""
+        return self._call_sonnet(vignette, self.system_prompt)
+
+    def extract_with_prompt(self, vignette: str, system_prompt: str) -> PatientFacts:
+        """Extract using a per-call system prompt. Used by the reactive extraction
+        architecture in B_prime_E_reactive: each tool call gets a focused prompt
+        covering only the fields it actually requested, avoiding long-schema
+        attention dilution."""
+        return self._call_sonnet(vignette, system_prompt)
+
+    def _call_sonnet(self, vignette: str, system_prompt: str) -> PatientFacts:
+        """Single Sonnet API call with the provided system prompt. Shared by
+        extract() and extract_with_prompt() — keeps token-counting and error
+        handling identical across the two architectures."""
         try:
             resp = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
                 temperature=0.0,
-                system=self.system_prompt,
+                system=system_prompt,
                 messages=[{"role": "user", "content": vignette}],
             )
             text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")

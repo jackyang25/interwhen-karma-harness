@@ -309,29 +309,25 @@ print(f"[preflight]   {meta['n_fields']} fields, {meta['prompt_chars']} chars")
 
 # DBTITLE 1,Orchestration knobs (edit before clicking Run All)
 # ──────────────────────────────────────────────────────────────────────────────
-# Focused re-run: only conditions whose verifier behavior changed in the
-# schema-aligned vocabulary rebuild (extractor prompt regenerated from MCP
-# schemas; semantic.py simplified to exact-name lookup).
+# Reactive-extraction follow-up. B_prime_E showed a large negative effect
+# (Δ=-9.0 pp vs B_prime, McNemar p≈1e-15) we attributed to upfront extractor
+# unreliability on the ~500-field schema (sex was 31% of all verifier flags).
+# B_prime_E_reactive tests that hypothesis: same B' system prompt, same
+# verifier, same model — only the extraction architecture changes from
+# upfront-500-fields to per-tool-call focused extraction (~4-5 fields per call).
 #
-#   E          → uses the deterministic semantic verifier; needs the fix
-#   B_prime_E  → same verifier, with the B' system prompt
+# Comparison targets after this run:
+#   - B_prime_E_reactive vs B_prime_E (existing): does reactive extraction
+#     neutralize the harm? If accuracy returns to ~B_prime (~73%), schema size
+#     was the bottleneck.
+#   - B_prime_E_reactive vs B_prime (existing): does the verifier with focused
+#     extraction now HELP over no verifier?
 #
-# A, B, C, B_prime, D are intentionally LEFT OUT — their adapters are unchanged
-# since the previous run (Qwen3Adapter for A/B/C/B', PostHocVerifierAdapter for
-# D), and D's parquet already has the primary_/verifier_ breakouts from the
-# previous round. Re-running them would produce identical results and just
-# burn GPU + Sonnet API.
-#
-# FORCE_RERUN=True is REQUIRED — E and B_prime_E already have summary.json
-# files. Without the override they'd be skipped as "already complete".
-# BACKUP_LEGACY=True (default) moves their existing parquets into timestamped
-# _backup_<ts>/ subdirs before the fresh data writes.
-#
-# To run EVERYTHING from scratch (final reproducibility pass), restore:
-#   CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E", "B_prime_E"]
+# Other conditions (A/B/C/B_prime/D/E/B_prime_E) are unchanged and not re-run
+# — their adapters haven't been modified.
 # ──────────────────────────────────────────────────────────────────────────────
-CONDITIONS_TO_RUN = ["E", "B_prime_E"]
-FORCE_RERUN = True         # override idempotency: E and B_prime_E have prior summary.json
+CONDITIONS_TO_RUN = ["B_prime_E_reactive"]
+FORCE_RERUN = True         # no prior summary.json for this condition; flag set for consistency
 BACKUP_LEGACY = True       # move any existing parquet to _backup_<ts>/ before a fresh run
 
 # COMMAND ----------
@@ -357,13 +353,14 @@ RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 # Pilot+full max-workers per condition. Picked to match the same numbers each
 # individual condition notebook uses, so results are comparable across runs.
 WORKERS = {
-    "A":          128,
-    "B":           64,
-    "B_prime":     64,
-    "C":           64,
-    "D":           32,   # adds a Sonnet verifier call per vignette
-    "E":           32,   # extractor (async Sonnet) + verified tool loop + potential verifier re-prompts
-    "B_prime_E":   32,   # E mechanics + B' system prompt forces tool use → most Sonnet pressure
+    "A":                 128,
+    "B":                  64,
+    "B_prime":            64,
+    "C":                  64,
+    "D":                  32,   # adds a Sonnet verifier call per vignette
+    "E":                  32,   # extractor (async Sonnet) + verified tool loop + potential verifier re-prompts
+    "B_prime_E":          32,   # E mechanics + B' system prompt forces tool use → most Sonnet pressure
+    "B_prime_E_reactive": 32,   # reactive: one Sonnet call per tool call (~3.7/vignette), but sequential within each vignette → concurrent Sonnet ≤ worker count, same as B_prime_E
 }
 
 PILOT_N = 10
@@ -390,210 +387,455 @@ def _system_for(cond: str) -> str | None:
         # This isolation matters: if we created a third "merged" prompt, we'd be
         # testing two variables at once. Reusing the literal B' prompt keeps
         # the only difference vs E the system-message channel.
-        "B_prime_E": REPO_ROOT / "prompts/condition_b_prime.txt",
+        "B_prime_E":          REPO_ROOT / "prompts/condition_b_prime.txt",
+        # B_prime_E_reactive (exploratory, post-hoc): same locked B' system prompt
+        # as B_prime_E. The only difference vs B_prime_E is the extraction
+        # architecture — reactive per-tool-call focused extraction instead of
+        # upfront 500-field extraction. Same system prompt isolates the
+        # extractor-architecture variable.
+        "B_prime_E_reactive": REPO_ROOT / "prompts/condition_b_prime.txt",
     }
     p = mapping.get(cond)
     return p.read_text().strip() if p is not None else None
 
 # COMMAND ----------
 
-# DBTITLE 1,Adapter builder (A/B/C/B', D, E + B_prime_E)
-def _build_adapter(cond: str):
-    """Return the adapter instance for the given condition."""
-    if cond in ("A", "B", "B_prime", "C"):
-        return Qwen3Adapter(
-            base_url=server.base_url,
-            use_tools=(cond != "A"),
-        )
-    if cond == "D":
-        from harness.verifier import PostHocVerifierAdapter
-        primary = Qwen3Adapter(base_url=server.base_url, use_tools=True)
-        return PostHocVerifierAdapter(
-            primary=primary,
-            verifier_prompt_path=str(REPO_ROOT / "prompts/condition_d.txt"),
-            verifier_model="claude-sonnet-4-6",
-        )
-    if cond in ("E", "B_prime_E"):
-        # Condition E: Qwen3 tool-calling loop with ClinicalInputMonitor intercept.
-        #
-        # B_prime_E (exploratory): EXACT same adapter as E. The only difference
-        # from E is the system prompt (handled by _system_for, threaded through
-        # run_eval → adapter.run(prompt, system=...)). Sharing the adapter is
-        # the methodological point: we want to isolate the system-prompt effect
-        # *on top of* the E mechanics, not introduce any other code-path delta.
-        #
-        # Architecture (mirrors Qwen3Adapter.run() exactly, adds one step):
-        #   1. Call /v1/completions, stop at </tool_call>
-        #   2. If no tool call → return final answer
-        #   3. If tool call → run ClinicalInputMonitor.fix():
-        #        violations found  → inject feedback into prompt, re-generate (no MCP call)
-        #        no violations     → dispatch MCP tool, inject real tool_response, continue
-        #        malformed JSON    → inject correction request, re-generate
-        #   4. Loop until final answer or MAX_TOOL_TURNS exhausted
-        #
-        # This replaces the previous stream_completion approach which bypassed
-        # the tool-calling loop entirely and never dispatched MCP tools.
-        from harness.extraction import FactExtractor
-        from harness.monitors import ClinicalInputMonitor
-        from harness.karma_adapter.mcp_tools import fetch_tool_schemas
-        from harness.karma_adapter.qwen3 import Qwen3Response
-        from transformers import AutoTokenizer
-        from openai import OpenAI
-        import asyncio, re
-        import nest_asyncio
-        nest_asyncio.apply()
+# DBTITLE 1,Plain adapters (A/B/C/B', D)
+def _build_plain_adapter(cond: str):
+    """A/B/C/B': plain Qwen3Adapter; use_tools toggled by whether the
+    condition exposes tools (A has none, B/C/B' do). The locked system prompt
+    that differentiates B/C/B' is threaded in by run_eval via _system_for,
+    NOT by the adapter itself."""
+    return Qwen3Adapter(
+        base_url=server.base_url,
+        use_tools=(cond != "A"),
+    )
 
-        _MODEL_ID   = "Qwen/Qwen3-30B-A3B-Thinking-2507"
-        _MAX_TURNS  = 10
-        _THINK_RE   = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
-        # The schema-aligned runtime extractor prompt is generated by the
-        # preflight cell from MCP's per-calculator schemas. There is no
-        # fallback — if this file is missing, preflight didn't run and we
-        # halt rather than silently use a stale/incompatible schema.
-        if not RUNTIME_EXTRACTOR_PATH.exists():
-            raise FileNotFoundError(
-                f"Runtime extractor prompt not found at {RUNTIME_EXTRACTOR_PATH}. "
-                f"The schema-dump preflight cell (§4.5) must run before E/B_prime_E. "
-                f"Run that cell, or delete /dbfs/results/provenance/mcp_calculator_schemas.json "
-                f"to force a fresh fetch + regeneration."
+def _build_posthoc_adapter():
+    """D: Qwen3 primary + Sonnet post-hoc verifier. The verifier receives
+    (case, candidate answer) and flags inconsistencies; on flag the primary
+    is asked to revise once. Token counts and model calls include the
+    verifier + revision (see harness/verifier/posthoc.py)."""
+    from harness.verifier import PostHocVerifierAdapter
+    primary = Qwen3Adapter(base_url=server.base_url, use_tools=True)
+    return PostHocVerifierAdapter(
+        primary=primary,
+        verifier_prompt_path=str(REPO_ROOT / "prompts/condition_d.txt"),
+        verifier_model="claude-sonnet-4-6",
+    )
+
+# COMMAND ----------
+
+# DBTITLE 1,_VerifiedAdapter builder (E, B_prime_E)
+def _build_verified_adapter():
+    """E and B_prime_E: Qwen3 tool-calling loop with ClinicalInputMonitor intercept.
+
+    B_prime_E (exploratory) shares this exact adapter with E. The only
+    difference vs E is the system prompt (handled by _system_for, threaded
+    through run_eval → adapter.run(prompt, system=...)). Sharing the adapter
+    is the methodological point: we isolate the system-prompt effect on top
+    of the E mechanics, with no other code-path delta.
+
+    Architecture (mirrors Qwen3Adapter.run() exactly, adds one step):
+      1. Call /v1/completions, stop at </tool_call>
+      2. If no tool call → return final answer
+      3. If tool call → run ClinicalInputMonitor.fix():
+           violations found → inject feedback into prompt, re-generate (no MCP call)
+           no violations    → dispatch MCP tool, inject real tool_response, continue
+           malformed JSON   → inject correction request, re-generate
+      4. Loop until final answer or MAX_TOOL_TURNS exhausted
+    """
+    from harness.extraction import FactExtractor
+    from harness.monitors import ClinicalInputMonitor
+    from harness.karma_adapter.mcp_tools import fetch_tool_schemas
+    from harness.karma_adapter.qwen3 import Qwen3Response
+    from transformers import AutoTokenizer
+    from openai import OpenAI
+    import asyncio, re
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    _MODEL_ID   = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+    _MAX_TURNS  = 10
+    _THINK_RE   = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+    # The schema-aligned runtime extractor prompt is generated by the
+    # preflight cell from MCP's per-calculator schemas. No fallback — if
+    # missing, preflight didn't run and we halt rather than silently use a
+    # stale/incompatible schema.
+    if not RUNTIME_EXTRACTOR_PATH.exists():
+        raise FileNotFoundError(
+            f"Runtime extractor prompt not found at {RUNTIME_EXTRACTOR_PATH}. "
+            f"The schema-dump preflight cell (§4.5) must run before E/B_prime_E. "
+            f"Run that cell, or delete /dbfs/results/provenance/mcp_calculator_schemas.json "
+            f"to force a fresh fetch + regeneration."
+        )
+    extractor         = FactExtractor(
+        prompt_path=str(RUNTIME_EXTRACTOR_PATH),
+        model="claude-sonnet-4-6",
+    )
+    feedback_template = (REPO_ROOT / "prompts/condition_e_feedback.txt").read_text()
+    tools             = fetch_tool_schemas()
+    tokenizer         = AutoTokenizer.from_pretrained(_MODEL_ID)
+    client            = OpenAI(base_url=server.base_url, api_key="EMPTY")
+
+    class _VerifiedAdapter:
+        """Qwen3 completions loop with per-tool-call semantic verification."""
+
+        def __init__(self):
+            self._last_monitor = None   # populated after each run(); inspect for smoke tests
+
+        def run(self, prompt, system=None):
+            import time as _time
+
+            # ── 1. Extract patient facts (Sonnet, deterministic) ──────────────
+            t_extract = _time.time()
+            facts = extractor.extract(prompt)
+            extractor_elapsed_s = _time.time() - t_extract
+            extractor_prompt_tokens = facts.prompt_tokens
+            extractor_completion_tokens = facts.completion_tokens
+
+            # ── 2. Render prompt with MCP tool schemas ────────────────────────
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            rendered = tokenizer.apply_chat_template(
+                messages, tools=tools, add_generation_prompt=True, tokenize=False,
             )
-        extractor         = FactExtractor(
-            prompt_path=str(RUNTIME_EXTRACTOR_PATH),
-            model="claude-sonnet-4-6",
+
+            # ── 3. Per-vignette monitor (stateful; one per run() call) ─────────
+            monitor = ClinicalInputMonitor(
+                patient_facts=facts,
+                feedback_template=feedback_template,
+            )
+            self._last_monitor = monitor
+            loop = asyncio.get_event_loop()
+
+            n_tool_calls    = 0     # successful MCP dispatches
+            n_model_calls   = 0     # LLM calls (>tool_calls when verifier fires)
+            qwen3_prompt_tokens     = 0
+            qwen3_completion_tokens = 0
+            rolling_prompt  = rendered
+
+            # ── 4. Tool-calling loop (timed; tokens summed from vLLM usage) ───
+            t_qwen3 = _time.time()
+            for _ in range(_MAX_TURNS + 1):
+                resp = client.completions.create(
+                    model=_MODEL_ID,
+                    prompt=rolling_prompt,
+                    max_tokens=4096,
+                    temperature=0.0,
+                    top_p=1.0,
+                    stop=["</tool_call>"],
+                )
+                n_model_calls += 1
+                if resp.usage is not None:
+                    qwen3_prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
+                    qwen3_completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
+
+                choice    = resp.choices[0]
+                generated = choice.text or ""
+
+                # vLLM strips the stop string; re-attach so regex sees full block.
+                if (choice.finish_reason == "stop"
+                        and "<tool_call>" in generated
+                        and "</tool_call>" not in generated):
+                    generated += "</tool_call>"
+
+                rolling_prompt += generated
+
+                # No tool call → final answer.
+                if "<tool_call>" not in generated:
+                    break
+
+                # Tool call detected: verify, then dispatch or inject feedback.
+                monitor.metrics.n_steps_seen += 1
+                event_info: dict = {}
+                loop.run_until_complete(monitor.verify(
+                    chunk=generated,
+                    token_index=0,
+                    event=asyncio.Event(),  # signal not needed; event_info carries results
+                    event_info=event_info,
+                ))
+
+                # fix() returns the new rolling_prompt:
+                #   violations → feedback injected, no MCP call
+                #   clean call  → MCP dispatched, tool_response injected
+                #   malformed   → correction request injected
+                rolling_prompt = loop.run_until_complete(
+                    monitor.fix(rolling_prompt, event_info)
+                )
+
+                # Count only real MCP dispatches (no violations, not malformed).
+                if not event_info.get("violations") and not event_info.get("malformed"):
+                    n_tool_calls += 1
+            qwen3_elapsed_s = _time.time() - t_qwen3
+
+            # ── 5. Extract final answer text ──────────────────────────────────
+            tail = rolling_prompt[len(rendered):]
+            if "<|im_start|>assistant" in tail:
+                tail = tail.rsplit("<|im_start|>assistant", 1)[-1]
+            tail = tail.split("<|im_end|>", 1)[0]
+            text = _THINK_RE.sub("", tail).strip()
+
+            return Qwen3Response(
+                text=text,
+                n_tool_calls=n_tool_calls,
+                raw_completion=rolling_prompt[len(rendered):],
+                stop_reason="stop",
+                # Honest totals = extractor (Sonnet) + Qwen3 (on-GPU vLLM).
+                prompt_tokens=extractor_prompt_tokens + qwen3_prompt_tokens,
+                completion_tokens=extractor_completion_tokens + qwen3_completion_tokens,
+                n_model_calls=n_model_calls,
+                n_verifier_fires=monitor.metrics.n_verifier_fires,
+                n_fixes_applied=monitor.metrics.n_fixes_applied,
+                extractor_prompt_tokens=extractor_prompt_tokens,
+                extractor_completion_tokens=extractor_completion_tokens,
+                extractor_elapsed_s=extractor_elapsed_s,
+                qwen3_prompt_tokens=qwen3_prompt_tokens,
+                qwen3_completion_tokens=qwen3_completion_tokens,
+                qwen3_elapsed_s=qwen3_elapsed_s,
+                violations_history=list(monitor.metrics.violations_history),
+                extracted_facts=dict(facts.raw) if facts.extractor_ok else {},
+            )
+
+    return _VerifiedAdapter()
+
+# COMMAND ----------
+
+# DBTITLE 1,_ReactiveVerifiedAdapter builder (B_prime_E_reactive)
+def _build_reactive_adapter():
+    """B_prime_E_reactive: reactive per-tool-call focused extraction.
+
+    Follow-up to B_prime_E. That condition showed a large negative effect
+    (Δ=-9.0 pp vs B_prime, McNemar p≈1e-15) attributed to upfront extractor
+    unreliability on the ~500-field schema (sex alone was 31% of all
+    verifier flags). This condition tests whether per-tool-call focused
+    extraction — same B' system prompt, same verifier, same model — fixes
+    the harm.
+
+    Architecture diff vs _VerifiedAdapter:
+      - NO upfront extractor.extract(prompt) at vignette start
+      - At each tool call: parse input_data keys → build focused prompt
+        covering only those fields → Sonnet extract with that prompt →
+        mutate monitor.patient_facts to the focused result → verify
+      - All other mechanics (loop, fix, MCP dispatch, response shape) identical
+
+    Same Qwen3Response schema as B_prime_E so the downstream runner and
+    analysis stages handle it without changes. extracted_facts is the union
+    of all per-tool-call extractions; extractor_* totals sum across calls.
+    """
+    from harness.extraction import FactExtractor
+    from harness.extraction.extractor import PatientFacts
+    from harness.extraction.prompt_builder import render_focused_prompt
+    from harness.monitors import ClinicalInputMonitor
+    from harness.karma_adapter.mcp_tools import fetch_tool_schemas
+    from harness.karma_adapter.qwen3 import Qwen3Response
+    from transformers import AutoTokenizer
+    from openai import OpenAI
+    import asyncio, json as _rj, re
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    _MODEL_ID   = "Qwen/Qwen3-30B-A3B-Thinking-2507"
+    _MAX_TURNS  = 10
+    _THINK_RE   = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+    _TOOL_RE    = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+    # FactExtractor.__init__ requires a readable prompt file; we override
+    # the system prompt per call via extract_with_prompt, but still need a
+    # valid path here. The runtime extractor prompt is the natural choice.
+    if not RUNTIME_EXTRACTOR_PATH.exists():
+        raise FileNotFoundError(
+            f"Runtime extractor prompt not found at {RUNTIME_EXTRACTOR_PATH}. "
+            f"The schema-dump preflight cell (§4.5) must run before B_prime_E_reactive."
         )
-        feedback_template = (REPO_ROOT / "prompts/condition_e_feedback.txt").read_text()
-        tools             = fetch_tool_schemas()
-        tokenizer         = AutoTokenizer.from_pretrained(_MODEL_ID)
-        client            = OpenAI(base_url=server.base_url, api_key="EMPTY")
+    extractor         = FactExtractor(
+        prompt_path=str(RUNTIME_EXTRACTOR_PATH),
+        model="claude-sonnet-4-6",
+    )
 
-        class _VerifiedAdapter:
-            """Qwen3 completions loop with per-tool-call semantic verification."""
+    # Load the schema dump once — focused prompts are derived from it per tool call.
+    if not SCHEMA_DUMP_PATH.exists():
+        raise FileNotFoundError(
+            f"MCP schema dump not found at {SCHEMA_DUMP_PATH}. "
+            f"The preflight (§4.5) must run before B_prime_E_reactive."
+        )
+    schema_dump       = _rj.loads(SCHEMA_DUMP_PATH.read_text())
 
-            def __init__(self):
-                self._last_monitor = None   # populated after each run(); inspect for smoke tests
+    feedback_template = (REPO_ROOT / "prompts/condition_e_feedback.txt").read_text()
+    tools             = fetch_tool_schemas()
+    tokenizer         = AutoTokenizer.from_pretrained(_MODEL_ID)
+    client            = OpenAI(base_url=server.base_url, api_key="EMPTY")
 
-            def run(self, prompt, system=None):
-                import time as _time
+    class _ReactiveVerifiedAdapter:
+        """Qwen3 tool-calling loop with per-tool-call focused fact extraction."""
 
-                # ── 1. Extract patient facts (Sonnet, deterministic) ──────────────
-                t_extract = _time.time()
-                facts = extractor.extract(prompt)
-                extractor_elapsed_s = _time.time() - t_extract
-                extractor_prompt_tokens = facts.prompt_tokens
-                extractor_completion_tokens = facts.completion_tokens
+        def __init__(self):
+            self._last_monitor = None   # populated after each run() for smoke tests
 
-                # ── 2. Render prompt with MCP tool schemas ────────────────────────
-                messages = []
-                if system:
-                    messages.append({"role": "system", "content": system})
-                messages.append({"role": "user", "content": prompt})
-                rendered = tokenizer.apply_chat_template(
-                    messages, tools=tools, add_generation_prompt=True, tokenize=False,
+        def run(self, prompt, system=None):
+            import time as _time
+
+            # ── 1. Render Qwen3 prompt (no upfront extraction) ────────────────
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            rendered = tokenizer.apply_chat_template(
+                messages, tools=tools, add_generation_prompt=True, tokenize=False,
+            )
+
+            # ── 2. Monitor with empty facts; we populate per-tool-call ────────
+            # PatientFacts is mutable enough that we swap it between tool calls.
+            # The monitor reads self.patient_facts at verify time.
+            placeholder_facts = PatientFacts(raw={}, extractor_ok=True)
+            monitor = ClinicalInputMonitor(
+                patient_facts=placeholder_facts,
+                feedback_template=feedback_template,
+            )
+            self._last_monitor = monitor
+            loop = asyncio.get_event_loop()
+
+            n_tool_calls    = 0
+            n_model_calls   = 0
+            qwen3_prompt_tokens     = 0
+            qwen3_completion_tokens = 0
+            # Reactive: extractor metrics accumulate ACROSS tool calls.
+            extractor_prompt_tokens     = 0
+            extractor_completion_tokens = 0
+            extractor_elapsed_s         = 0.0
+            accumulated_facts: dict = {}     # union of per-tool-call extractions
+            rolling_prompt  = rendered
+
+            # ── 3. Tool-calling loop ──────────────────────────────────────────
+            t_qwen3 = _time.time()
+            for _ in range(_MAX_TURNS + 1):
+                resp = client.completions.create(
+                    model=_MODEL_ID,
+                    prompt=rolling_prompt,
+                    max_tokens=4096,
+                    temperature=0.0,
+                    top_p=1.0,
+                    stop=["</tool_call>"],
                 )
+                n_model_calls += 1
+                if resp.usage is not None:
+                    qwen3_prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
+                    qwen3_completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
 
-                # ── 3. Per-vignette monitor (stateful; one per run() call) ─────────
-                monitor = ClinicalInputMonitor(
-                    patient_facts=facts,
-                    feedback_template=feedback_template,
+                choice    = resp.choices[0]
+                generated = choice.text or ""
+                if (choice.finish_reason == "stop"
+                        and "<tool_call>" in generated
+                        and "</tool_call>" not in generated):
+                    generated += "</tool_call>"
+                rolling_prompt += generated
+
+                if "<tool_call>" not in generated:
+                    break
+
+                # ── 3a. Reactive focused extraction (the new bit) ──────────────
+                # Parse the tool call to learn which fields the model wants.
+                # If it's a medical_calculator_output call with an input_data
+                # dict, extract only those fields from the case. For other
+                # tool calls (drug search, calculator metadata), skip
+                # extraction — they don't carry clinical inputs to verify.
+                tool_match = _TOOL_RE.search(generated)
+                if tool_match is not None:
+                    try:
+                        tool_obj = _rj.loads(tool_match.group(1))
+                    except _rj.JSONDecodeError:
+                        tool_obj = None
+                    if (isinstance(tool_obj, dict)
+                            and tool_obj.get("name") == "medical_calculator_output"
+                            and isinstance(tool_obj.get("arguments"), dict)
+                            and isinstance(tool_obj["arguments"].get("input_data"), dict)):
+                        wanted_fields = list(tool_obj["arguments"]["input_data"].keys())
+                        if wanted_fields:
+                            focused_prompt = render_focused_prompt(schema_dump, wanted_fields)
+                            t_extract = _time.time()
+                            focused_facts = extractor.extract_with_prompt(prompt, focused_prompt)
+                            extractor_elapsed_s         += _time.time() - t_extract
+                            extractor_prompt_tokens     += focused_facts.prompt_tokens
+                            extractor_completion_tokens += focused_facts.completion_tokens
+                            if focused_facts.extractor_ok:
+                                accumulated_facts.update(focused_facts.raw or {})
+                                monitor.patient_facts = focused_facts
+                            else:
+                                # Extractor failure on this call — empty facts
+                                # so verifier conservatively skips (no false
+                                # positives from a broken call).
+                                monitor.patient_facts = PatientFacts(raw={}, extractor_ok=True)
+                        else:
+                            monitor.patient_facts = PatientFacts(raw={}, extractor_ok=True)
+                    else:
+                        # Non-clinical tool call — empty facts, verifier no-ops
+                        monitor.patient_facts = PatientFacts(raw={}, extractor_ok=True)
+
+                # ── 3b. Verify + fix (same mechanics as _VerifiedAdapter) ─────
+                monitor.metrics.n_steps_seen += 1
+                event_info: dict = {}
+                loop.run_until_complete(monitor.verify(
+                    chunk=generated,
+                    token_index=0,
+                    event=asyncio.Event(),
+                    event_info=event_info,
+                ))
+                rolling_prompt = loop.run_until_complete(
+                    monitor.fix(rolling_prompt, event_info)
                 )
-                self._last_monitor = monitor
-                loop = asyncio.get_event_loop()
+                if not event_info.get("violations") and not event_info.get("malformed"):
+                    n_tool_calls += 1
+            qwen3_elapsed_s = _time.time() - t_qwen3
 
-                n_tool_calls    = 0     # successful MCP dispatches
-                n_model_calls   = 0     # LLM calls (>tool_calls when verifier fires)
-                qwen3_prompt_tokens     = 0
-                qwen3_completion_tokens = 0
-                rolling_prompt  = rendered
+            # ── 4. Extract final answer text ──────────────────────────────────
+            tail = rolling_prompt[len(rendered):]
+            if "<|im_start|>assistant" in tail:
+                tail = tail.rsplit("<|im_start|>assistant", 1)[-1]
+            tail = tail.split("<|im_end|>", 1)[0]
+            text = _THINK_RE.sub("", tail).strip()
 
-                # ── 4. Tool-calling loop (timed; tokens summed from vLLM usage) ───
-                t_qwen3 = _time.time()
-                for _ in range(_MAX_TURNS + 1):
-                    resp = client.completions.create(
-                        model=_MODEL_ID,
-                        prompt=rolling_prompt,
-                        max_tokens=4096,
-                        temperature=0.0,
-                        top_p=1.0,
-                        stop=["</tool_call>"],
-                    )
-                    n_model_calls += 1
-                    if resp.usage is not None:
-                        qwen3_prompt_tokens     += getattr(resp.usage, "prompt_tokens",     0) or 0
-                        qwen3_completion_tokens += getattr(resp.usage, "completion_tokens", 0) or 0
+            return Qwen3Response(
+                text=text,
+                n_tool_calls=n_tool_calls,
+                raw_completion=rolling_prompt[len(rendered):],
+                stop_reason="stop",
+                # Honest totals: extractor (sum over tool calls) + Qwen3 (sum over turns)
+                prompt_tokens=extractor_prompt_tokens + qwen3_prompt_tokens,
+                completion_tokens=extractor_completion_tokens + qwen3_completion_tokens,
+                n_model_calls=n_model_calls,
+                n_verifier_fires=monitor.metrics.n_verifier_fires,
+                n_fixes_applied=monitor.metrics.n_fixes_applied,
+                extractor_prompt_tokens=extractor_prompt_tokens,
+                extractor_completion_tokens=extractor_completion_tokens,
+                extractor_elapsed_s=extractor_elapsed_s,
+                qwen3_prompt_tokens=qwen3_prompt_tokens,
+                qwen3_completion_tokens=qwen3_completion_tokens,
+                qwen3_elapsed_s=qwen3_elapsed_s,
+                violations_history=list(monitor.metrics.violations_history),
+                # Union of all per-tool-call focused extractions
+                extracted_facts=dict(accumulated_facts),
+            )
 
-                    choice    = resp.choices[0]
-                    generated = choice.text or ""
+    return _ReactiveVerifiedAdapter()
 
-                    # vLLM strips the stop string; re-attach so regex sees full block.
-                    if (choice.finish_reason == "stop"
-                            and "<tool_call>" in generated
-                            and "</tool_call>" not in generated):
-                        generated += "</tool_call>"
+# COMMAND ----------
 
-                    rolling_prompt += generated
-
-                    # No tool call → final answer.
-                    if "<tool_call>" not in generated:
-                        break
-
-                    # ── Tool call detected: verify then dispatch or inject feedback ──
-                    monitor.metrics.n_steps_seen += 1
-                    event_info: dict = {}
-                    loop.run_until_complete(monitor.verify(
-                        chunk=generated,
-                        token_index=0,
-                        event=asyncio.Event(),  # signal not needed; event_info carries results
-                        event_info=event_info,
-                    ))
-
-                    # fix() returns the new rolling_prompt:
-                    #   violations → feedback injected, no MCP call
-                    #   clean call  → MCP dispatched, tool_response injected
-                    #   malformed   → correction request injected
-                    rolling_prompt = loop.run_until_complete(
-                        monitor.fix(rolling_prompt, event_info)
-                    )
-
-                    # Count only real MCP dispatches (no violations, not malformed).
-                    if not event_info.get("violations") and not event_info.get("malformed"):
-                        n_tool_calls += 1
-                qwen3_elapsed_s = _time.time() - t_qwen3
-
-                # ── 5. Extract final answer text ──────────────────────────────────
-                tail = rolling_prompt[len(rendered):]
-                if "<|im_start|>assistant" in tail:
-                    tail = tail.rsplit("<|im_start|>assistant", 1)[-1]
-                tail = tail.split("<|im_end|>", 1)[0]
-                text = _THINK_RE.sub("", tail).strip()
-
-                return Qwen3Response(
-                    text=text,
-                    n_tool_calls=n_tool_calls,
-                    raw_completion=rolling_prompt[len(rendered):],
-                    stop_reason="stop",
-                    # Honest totals = extractor (Sonnet) + Qwen3 (on-GPU vLLM).
-                    prompt_tokens=extractor_prompt_tokens + qwen3_prompt_tokens,
-                    completion_tokens=extractor_completion_tokens + qwen3_completion_tokens,
-                    n_model_calls=n_model_calls,
-                    n_verifier_fires=monitor.metrics.n_verifier_fires,
-                    n_fixes_applied=monitor.metrics.n_fixes_applied,
-                    # Deployment-honest breakouts:
-                    extractor_prompt_tokens=extractor_prompt_tokens,
-                    extractor_completion_tokens=extractor_completion_tokens,
-                    extractor_elapsed_s=extractor_elapsed_s,
-                    qwen3_prompt_tokens=qwen3_prompt_tokens,
-                    qwen3_completion_tokens=qwen3_completion_tokens,
-                    qwen3_elapsed_s=qwen3_elapsed_s,
-                    # Per-row structured verifier events (failure analysis input).
-                    violations_history=list(monitor.metrics.violations_history),
-                    # The extracted patient facts the verifier was comparing
-                    # against. Lets analysts see why a row had/didn't have
-                    # violations without re-running Sonnet.
-                    extracted_facts=dict(facts.raw) if facts.extractor_ok else {},
-                )
-
-        return _VerifiedAdapter()
+# DBTITLE 1,_build_adapter dispatcher
+def _build_adapter(cond: str):
+    """Route a condition name to its adapter builder. Adding a new condition
+    means adding a branch here and (if needed) a new helper above."""
+    if cond in ("A", "B", "B_prime", "C"):
+        return _build_plain_adapter(cond)
+    if cond == "D":
+        return _build_posthoc_adapter()
+    if cond in ("E", "B_prime_E"):
+        return _build_verified_adapter()
+    if cond == "B_prime_E_reactive":
+        return _build_reactive_adapter()
     raise ValueError(f"Unknown condition: {cond}")
 
 # COMMAND ----------

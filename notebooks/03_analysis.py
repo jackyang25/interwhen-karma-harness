@@ -48,7 +48,11 @@ CONDITIONS = {
     # Exploratory (post-hoc, like B'). Tests whether interwhen helps once
     # the tool-use ceiling is removed. Kept out of the pre-registered
     # Bonferroni family; compared in a separate exploratory block below.
-    "B_prime_E": "qwen3_condition_B_prime_E_full",
+    "B_prime_E":          "qwen3_condition_B_prime_E_full",
+    # Exploratory follow-up: same as B_prime_E but with reactive per-tool-call
+    # focused fact extraction instead of upfront 500-field extraction. Tests
+    # whether extractor schema size was the bottleneck in B_prime_E's harm.
+    "B_prime_E_reactive": "qwen3_condition_B_prime_E_reactive_full",
 }
 
 # One-time migration: rename legacy D_prime dirs to D
@@ -181,8 +185,11 @@ else:
 exploratory_results: dict[str, dict] = {}
 
 for label, (left, right) in {
-    "B_prime_E_vs_B_prime": ("B_prime_E", "B_prime"),  # headline: does interwhen add value once tools are forced?
-    "B_prime_E_vs_E":       ("B_prime_E", "E"),         # secondary: does forcing tools rescue interwhen?
+    "B_prime_E_vs_B_prime":                 ("B_prime_E", "B_prime"),  # headline: does interwhen add value once tools are forced?
+    "B_prime_E_vs_E":                       ("B_prime_E", "E"),         # secondary: does forcing tools rescue interwhen?
+    # Reactive-extraction follow-up comparisons (post-hoc):
+    "B_prime_E_reactive_vs_B_prime_E":      ("B_prime_E_reactive", "B_prime_E"),  # does reactive extraction fix the B_prime_E harm?
+    "B_prime_E_reactive_vs_B_prime":        ("B_prime_E_reactive", "B_prime"),    # does the verifier-with-reactive-extraction help vs no verifier?
 }.items():
     if left not in dfs or right not in dfs:
         exploratory_results[label] = {"status": f"missing condition data ({left} or {right} not loaded)"}
@@ -224,7 +231,7 @@ if "B" in dfs:
     print(f"Tool-using subset (B): {len(b_tool_using_ids)} / {len(dfs['B'])} rows")
 
     sub_rows = []
-    for cond in ["A", "B", "C", "D", "E", "B_prime_E"]:
+    for cond in ["A", "B", "C", "D", "E", "B_prime_E", "B_prime_E_reactive"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_using_ids)]
@@ -344,7 +351,7 @@ import json as _vh_json
 
 verifier_summaries: dict[str, dict] = {}
 
-for cond in ["E", "B_prime_E"]:
+for cond in ["E", "B_prime_E", "B_prime_E_reactive"]:
     if cond not in dfs:
         continue
     df = dfs[cond]
@@ -572,7 +579,7 @@ cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
 if "B" in dfs:
     b_tool_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
     strat_rows = []
-    for cond in ["A", "B", "C", "D", "E", "B_prime_E"]:
+    for cond in ["A", "B", "C", "D", "E", "B_prime_E", "B_prime_E_reactive"]:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_ids)]
@@ -619,7 +626,7 @@ base.to_csv(anal_dir / "paired_rows.csv", index=False)
 # baseline. E uses B (the no-verifier tools baseline); B_prime_E uses B_prime
 # (the forced-tool-use baseline). The flip_type tells you whether the
 # verifier helped, hurt, or did nothing for that vignette.
-for cond, baseline in [("E", "B"), ("B_prime_E", "B_prime")]:
+for cond, baseline in [("E", "B"), ("B_prime_E", "B_prime"), ("B_prime_E_reactive", "B_prime")]:
     if cond not in dfs or baseline not in dfs:
         continue
     sub = dfs[cond].copy()

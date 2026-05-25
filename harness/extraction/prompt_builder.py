@@ -175,6 +175,40 @@ def render_extractor_prompt(schema_dump: dict[str, Any]) -> str:
     return _PROMPT_HEADER + schema_body + "\n"
 
 
+def render_focused_prompt(
+    schema_dump: dict[str, Any],
+    field_names: list[str] | set[str] | tuple[str, ...],
+) -> str:
+    """Generate a focused Sonnet system prompt limited to the specified fields.
+
+    Used by the reactive extraction architecture in B_prime_E_reactive: when the
+    model emits a tool call with specific input fields, the verifier extracts
+    *only* those fields from the case via a small focused prompt. This avoids
+    the long-schema attention dilution the full extractor prompt suffers from.
+
+    The behavioral discipline (omit absent fields, no inference, use case-stated
+    units) is identical to the full extractor prompt — only the schema body
+    differs.
+
+    Deterministic: same dump + same field_names → identical output. Unknown
+    field names (not in the dump's field union) are silently skipped.
+    """
+    field_union = build_field_union(schema_dump)
+    wanted = set(field_names)
+    focused = {k: v for k, v in field_union.items() if k in wanted}
+
+    sorted_fields = sorted(focused.items())
+    lines: list[str] = ["{"]
+    for i, (field_name, field_schema) in enumerate(sorted_fields):
+        annotation = _summarize_field_schema(field_schema)
+        comma = "," if i < len(sorted_fields) - 1 else ""
+        lines.append(f'  "{field_name}": null{comma}  // {annotation}')
+    lines.append("}")
+    schema_body = "\n".join(lines)
+
+    return _PROMPT_HEADER + schema_body + "\n"
+
+
 def regenerate_extractor_prompt(
     dump_path: Path | str,
     output_path: Path | str,
