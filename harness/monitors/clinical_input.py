@@ -1,19 +1,23 @@
-"""ClinicalInputMonitor — literal interwhen VerifyMonitor for clinical tool-call
+"""ClinicalInputMonitor — interwhen-style VerifyMonitor for clinical tool-call
 input verification.
 
-This module subclasses `interwhen.monitors.base.VerifyMonitor` so the
-underlying interwhen library drives the model loop, step extraction, and
-feedback injection. We provide the three abstract methods:
+This module subclasses `interwhen.monitors.base.VerifyMonitor` to inherit the
+contract (step_extractor / verify / fix), but the driver of the model loop
+is the inline `_VerifiedAdapter` in `notebooks/02_run_all.py`, not interwhen's
+`stream_completion`. That driver calls `monitor.verify()` on every detected
+`<tool_call>` block and `monitor.fix()` to rewrite the prompt with either
+verifier feedback or the dispatched tool result.
+
+We provide the three abstract methods:
 
 - `step_extractor`: returns (True, step_text) when a complete
-  `<tool_call>...</tool_call>` block has been emitted, signalling interwhen
-  to fire verification at that commit point.
+  `<tool_call>...</tool_call>` block has been emitted (kept for compatibility
+  with interwhen's interface; the inline adapter detects blocks itself).
 - `verify`: parses the tool_call JSON, runs `harness.verifier.semantic.verify`
-  against the patient facts produced by the fact extractor, sets the
-  asyncio.Event if violations are found.
-- `fix`: rebuilds the prompt with the formatted feedback message replacing
-  the bad tool_call, so interwhen's `stream_completion` can recurse and
-  re-generate from that point.
+  against the patient facts produced by the fact extractor, records any
+  violations in `MonitorMetrics`.
+- `fix`: rebuilds the prompt — injects feedback on violations, or dispatches
+  the MCP tool and splices in the real response on a clean call.
 
 The verifier itself is deterministic (no LLM); the fact extractor is an LLM
 call but is bounded to structured extraction. This split is the methodological
@@ -90,9 +94,9 @@ class ClinicalInputMonitor(VerifyMonitor):
     async def verify(self, chunk, token_index, event, event_info):
         """Inspect every complete <tool_call> block.
 
-        We ALWAYS set the event because interwhen's stream_completion does
-        not dispatch tools itself — it just streams text. So whenever a
-        tool_call appears we must interrupt the stream so `fix` can either
+        We ALWAYS set the event because the driver (the inline _VerifiedAdapter
+        in 02_run_all) does not dispatch tools itself — it just emits text.
+        Whenever a tool_call appears we interrupt so `fix` can either
         (a) execute the tool and inject its real result, or (b) inject
         feedback if the call's inputs were inconsistent with the case.
 

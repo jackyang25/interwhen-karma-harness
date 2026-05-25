@@ -1,9 +1,12 @@
 """Sonnet-based fact extractor for Condition E.
 
 Reads a vignette, returns a structured patient JSON object. The schema is
-fixed in `conf/prompts/extractor.txt`. The extractor model is Sonnet 4.6,
-deliberately different from the Qwen3 model being evaluated so the verifier
-isn't comparing the model against itself.
+generated at run time by the preflight cell in `notebooks/02_run_all.py`
+from MCP's per-calculator input schemas (see
+`harness.extraction.prompt_builder`). The runtime prompt lives at
+`/dbfs/results/_runtime/extractor_prompt.txt`. The extractor model is
+Sonnet 4.6, deliberately different from the Qwen3 model being evaluated
+so the verifier isn't comparing the model against itself.
 
 The output is consumed by `harness.verifier.semantic` to check tool-call
 inputs against the case before they are dispatched.
@@ -35,17 +38,6 @@ class PatientFacts:
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
-    def get(self, *path: str, default: Any = None) -> Any:
-        """Nested lookup with safe fallback. `facts.get('vitals', 'bp_systolic_mmHg')`."""
-        node: Any = self.raw
-        for key in path:
-            if not isinstance(node, dict):
-                return default
-            node = node.get(key)
-            if node is None:
-                return default
-        return node
-
 
 class FactExtractor:
     """Stateless extractor — one instance can serve the whole eval."""
@@ -55,7 +47,7 @@ class FactExtractor:
         prompt_path: str,
         model: str = DEFAULT_EXTRACTOR_MODEL,
         api_key: str | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = 8192,
     ):
         self.system_prompt = open(prompt_path).read().strip()
         self.model = model

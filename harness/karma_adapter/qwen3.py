@@ -2,10 +2,12 @@
 
 Why text-mode (and not chat-completions + structured tools)? Two reasons:
 
-1. **interwhen compatibility.** interwhen's `stream_completion` drives the raw
-   text endpoint (`/v1/completions`) and watches the streamed text for step
-   boundaries. Condition E needs this pattern; using a different endpoint
-   for E than for A/B/C/D'/B' would mix channels and confound comparisons.
+1. **Single channel across conditions.** Condition E uses the inline
+   `_VerifiedAdapter` in `notebooks/02_run_all.py`, which watches the raw
+   text stream for `<tool_call>` blocks and dispatches via the
+   ClinicalInputMonitor. Using a different endpoint for E than for
+   A/B/C/B'/D would mix channels and confound comparisons. All Qwen3
+   conditions therefore go through `/v1/completions` text-mode.
 
 2. **Qwen3's native trained channel.** Qwen3 was fine-tuned to emit
    `<tool_call>{...}</tool_call>` tags as raw text. The structured tools API
@@ -13,7 +15,7 @@ Why text-mode (and not chat-completions + structured tools)? Two reasons:
    behavior, different parsing layer. Text-mode exposes the raw stream
    directly, which is what we want.
 
-Architecture:
+Architecture (this file, used by A/B/C/B' and as the primary in D):
 - `apply_chat_template(messages, tools=...)` from the HF tokenizer builds the
   prompt in Qwen3's native format (no need to hand-write the chatml).
 - Call `/v1/completions` (text endpoint), stop at `</tool_call>` so we can
@@ -22,9 +24,9 @@ Architecture:
   `<tool_response>` block to the prompt, and continue generation from there.
 - Loop until the model produces output without a tool call.
 
-This file replaces the earlier chat-completions adapter. Class name and
-public API (`Qwen3Adapter.run`, `Qwen3Response`) are preserved so notebooks
-do not need to change their imports.
+Condition E and B'+E use a separate adapter (inline in 02_run_all) that
+inserts the ClinicalInputMonitor between detection and dispatch, but the
+underlying text-mode channel is identical.
 """
 from __future__ import annotations
 
@@ -45,22 +47,17 @@ _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 class Qwen3Response:
     text: str
     n_tool_calls: int
-    raw_prompt: str
-    raw_completion: str
+    raw_completion: str   # full rolling prompt tail (tool_call + tool_response blocks); used by 02_run_all smoke test
     stop_reason: str
     # Honest totals (summed across all model calls in this row).
     # For A/B/C/B' these are pure Qwen3 vLLM usage.
-    # For the inline E adapter in 08_run_all these are extractor + Qwen3.
+    # For the inline E adapter in 02_run_all these are extractor + Qwen3.
     prompt_tokens: int = 0
     completion_tokens: int = 0
     n_model_calls: int = 0
     # Condition-E verifier instrumentation. Zero for all other conditions.
     n_verifier_fires: int = 0   # tool calls where ClinicalInputMonitor found violations
     n_fixes_applied: int = 0    # prompt rewrites (feedback injections + malformed recoveries)
-    # Field kept for compatibility with the old chat-completions adapter shape;
-    # text-mode stores the full raw text in `raw_completion`, so this is
-    # populated as a single-element list referring to the rolling prompt.
-    raw_messages: list[dict[str, Any]] = field(default_factory=list)
     # ── E-shape deployment-honest breakouts (zero for A/B/C/B') ───────────
     # Extractor = Sonnet API call (billed by Anthropic).
     # qwen3_*   = on-GPU vLLM inference (single condition E session, summed
@@ -73,6 +70,11 @@ class Qwen3Response:
     qwen3_elapsed_s: float = 0.0
     # Per-row structured record of every verifier intervention (E only).
     violations_history: list[dict[str, Any]] = field(default_factory=list)
+    # Per-row Sonnet-extracted patient facts (E and B'+E only). Lets you see
+    # exactly what the verifier had to compare against — distinguishes
+    # "model was faithful, verifier correctly silent" from "extractor was
+    # sparse, verifier had nothing to compare". Empty dict for non-E rows.
+    extracted_facts: dict[str, Any] = field(default_factory=dict)
 
 
 class Qwen3Adapter:
@@ -174,7 +176,6 @@ class Qwen3Adapter:
                 return Qwen3Response(
                     text=_strip_thinking(_extract_assistant_tail(generated)),
                     n_tool_calls=n_tool_calls,
-                    raw_prompt=rendered,
                     raw_completion=rolling_prompt[len(rendered):],
                     stop_reason=choice.finish_reason or "stop",
                     prompt_tokens=prompt_tokens,
@@ -188,7 +189,6 @@ class Qwen3Adapter:
                 return Qwen3Response(
                     text=_strip_thinking(_extract_assistant_tail(generated)),
                     n_tool_calls=n_tool_calls,
-                    raw_prompt=rendered,
                     raw_completion=rolling_prompt[len(rendered):],
                     stop_reason="malformed_tool_call",
                     prompt_tokens=prompt_tokens,
@@ -220,7 +220,6 @@ class Qwen3Adapter:
         return Qwen3Response(
             text=_strip_thinking(_extract_assistant_tail(rolling_prompt[len(rendered):])),
             n_tool_calls=n_tool_calls,
-            raw_prompt=rendered,
             raw_completion=rolling_prompt[len(rendered):],
             stop_reason="max_tool_turns",
             prompt_tokens=prompt_tokens,

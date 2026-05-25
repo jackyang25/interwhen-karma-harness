@@ -1,5 +1,0 @@
-Your planned tool call has an input that does not match the patient case:
-
-{violations}
-
-Re-read the case carefully and call the tool again with corrected inputs. If the case truly does not specify the required input, do not invent a value; explain in your reply.

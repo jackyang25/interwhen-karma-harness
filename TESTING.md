@@ -47,7 +47,7 @@ This project tests whether interwhen-style intermediate verification is that int
 **Secondary comparison (exploratory, not in confirmatory family):**
 - **B' vs B** — Does forcing tool use via a prompt close the tool-underuse gap observed in the open-weights baseline?
 
-The secondary comparison was added after Condition B was run on Qwen3 and revealed that the model invokes tools on a small minority of vignettes (median 0 calls/vignette). Because input-verification interventions (C/D/E) can only act on rows where a tool call occurs, the underuse rate caps the effect size of the primary track. B' characterizes whether prompt-level tool-use enforcement narrows that gap; it is reported as exploratory because the condition was specified after observing baseline behavior. See pre-registration for the timestamped commit predating C/D/E.
+The secondary comparison was added after Condition B was run on Qwen3 and revealed that the model invokes tools on a small minority of vignettes (median 0 calls/vignette). Because input-verification interventions (C/D/E) can only act on rows where a tool call occurs, the underuse rate caps the effect size of the primary track. B' characterizes whether prompt-level tool-use enforcement narrows that gap; it is reported as exploratory because the condition was specified after observing baseline behavior. The timestamped commits in `prompts/` document when each condition's prompt was locked.
 
 ---
 
@@ -156,13 +156,13 @@ The original plan considered 8 conditions including self-consistency (F), few-sh
 
 **Cost of dropping them:** reviewers can ask "couldn't variance reduction (F), worked examples (C'), or model self-checking (D) have achieved the same effect?" None of these are tested. The claim is scoped narrowly to the conditions run — not all possible cheaper alternatives.
 
-**Framing of Condition C as best-effort prompting (not minimal prompting).** Earlier drafts described C as "the cheapest upfront intervention" — a one-sentence nudge. After internal review, C was reframed as a **best-effort prompt-only intervention**: 2-3 sentences, concretely specifying what to verify (units, enum choices, numerics), with a fallback instruction for missing evidence. This raises the bar that E must clear. The point of C is no longer "what does the laziest possible prompt achieve" but "what does prompting alone, done well, achieve" — the comparison that actually matters for deployment decisions. The locked text lives at `conf/prompts/condition_c.txt`.
+**Framing of Condition C as best-effort prompting (not minimal prompting).** Earlier drafts described C as "the cheapest upfront intervention" — a one-sentence nudge. After internal review, C was reframed as a **best-effort prompt-only intervention**: 2-3 sentences, concretely specifying what to verify (units, enum choices, numerics), with a fallback instruction for missing evidence. This raises the bar that E must clear. The point of C is no longer "what does the laziest possible prompt achieve" but "what does prompting alone, done well, achieve" — the comparison that actually matters for deployment decisions. The locked text lives at `prompts/condition_c.txt`.
 
 **Why D is kept:** it is structurally distinct from C — post-hoc on the produced output, not an upfront instruction — and it is the cheapest verification pattern (one extra call vs interwhen's mid-stream forking). Without D, "E beats C" cannot rule out that a simple end-of-output check would have done equally well, which is the most important deployment question this study can answer.
 
 **Why B' was added (secondary).** Condition B on Qwen3 revealed that the model elects to call tools on ~25% of vignettes (median 0 calls/vignette) — substantially less than closed-API models like Sonnet (mean 4.3 calls/vignette under the same setup). Because the primary input-verification track (C/D'/E) only acts on rows where a tool call occurs, the underuse rate constrains the effect-size ceiling of those conditions. B' adds a prompt-level intervention targeting the tool-use channel itself, structurally parallel to D' (both are B-variants intervening on different stages of the tool-use pipeline). B' vs B answers a distinct question — "does forcing tool use help open-weights models close the tool-access gap" — and is reported as exploratory because the condition was specified after observing baseline behavior. The primary input-verification claim is unchanged.
 
-### Open methodological decisions (locked in pre-registration before production)
+### Open methodological decisions (locked before production)
 
 - **Exact prompt text for Condition C.** Drafted and pilot-validated; locked before production.
 - **Verifier model and prompt for Condition D.** Verifier model is a different instance from the model being evaluated to avoid self-agreement bias. Verifier prompt drafted and pilot-validated. Revision policy (whether and how many times the original model is asked to revise on flagged inconsistency) pilot-determined.
@@ -171,7 +171,7 @@ The original plan considered 8 conditions including self-consistency (F), few-sh
 - **Max retry rounds per fork point in E.** Default candidate: 2. Pilot-validated.
 - **Sampling parameters** (temperature, top-p) for A/B/C/D/E. Match EkaCare's setup once verified in KARMA codebase, otherwise pilot-determined.
 - **Calculator subset the verifier handles.** Specific calculators from EkaCare's 403 covered by the verifier. Affects which vignettes are eligible for E.
-- **KARMA, model, and benchmark version pinning.** Specific git commits / model revisions / dataset revisions documented in pre-registration.
+- **KARMA, model, and benchmark version pinning.** Specific git commits / model revisions / dataset revisions are pinned in `pyproject.toml` and recorded per-run in each bundle's `provenance/provenance.json`.
 
 ---
 
@@ -267,20 +267,12 @@ interwhen-karma-harness/
 ├── harness/                  # Python package (this project's code)
 │   ├── extraction/           # Fact extractor (LLM with structured output)
 │   ├── verifier/             # Semantic verifier (deterministic comparison)
-│   ├── monitors/             # interwhen Monitor subclasses
-│   ├── karma_adapter/        # Custom KARMA model adapter
-│   ├── conditions/           # A / B / C / D / E configurations
-│   ├── analysis/             # Statistical analysis, decomposition, plotting
-│   ├── _patches.py           # Runtime patch: adds EKA_API_TOKEN Bearer auth to KARMA
-│   └── tests/                # Unit tests
-├── conf/                     # Locked configuration committed to git
-│   ├── pre_registration.md   # Pre-registered analysis plan (committed before runs)
-│   ├── prompts/              # Locked prompt texts per condition
-│   └── calculator_subset.json # Calculators covered by the verifier
-├── data/                     # Fact-extractor validation set, small artifacts
-├── notebooks/                # Databricks notebooks (numbered for execution order)
-├── docs/
-│   └── failure_analysis.md   # Manual failure analysis from baseline run
+│   ├── monitors/             # interwhen Monitor subclass (clinical_input)
+│   ├── karma_adapter/        # Sonnet adapter (apparatus) + Qwen3 adapter
+│   ├── analysis/             # Statistical primitives (Wilson, McNemar, Bonferroni)
+│   └── _patches.py           # Runtime patch: adds EKA_API_TOKEN Bearer auth to KARMA
+├── prompts/                  # Locked prompt texts per condition (committed)
+├── notebooks/                # Databricks notebooks: 00_smoke, 01_apparatus, 02_run_all, 03_analysis
 └── results/                  # Gitignored — outputs to DBFS / object storage
 ```
 
@@ -293,7 +285,7 @@ Neither framework is modified in this repo.
 
 ## 11. Replication
 
-All code, the fact-extractor validation set, calculator schemas for the covered subset, random seeds, model versions, and pre-registration document released open-source. Raw logs (model traces, verifier firings, feedback messages) released where licensing permits.
+All code, model versions, dataset revisions, MCP calculator schemas (snapshotted per run in `provenance/mcp_calculator_schemas.json`), and locked prompts released open-source. Raw logs (model traces, verifier firings, feedback messages) released where licensing permits.
 
 **Compute requirements:** vLLM-served Qwen3-30B-A3B-Thinking-2507 requires a single-node GPU with ≥80GB VRAM (1× H100 80GB or 2× A100 40GB with tensor parallelism). Any environment that supports this works — local workstation, cloud GPU rental, or managed clusters (e.g., Databricks single-node GPU compute).
 

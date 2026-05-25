@@ -25,9 +25,7 @@ See [`TESTING.md` Section 11](./TESTING.md#11-replication) for compute requireme
 
 ```
 harness/              # this project's code (Python package)
-conf/                 # pre-registered prompts, sampling params
-data/                 # fact-extractor validation set, calculator subset spec
-notebooks/            # Databricks notebooks for runs and analysis
-docs/                 # failure analysis and other write-ups
+prompts/              # locked condition prompts (committed)
+notebooks/            # Databricks notebooks: 00 smoke, 01 apparatus, 02 run_all, 03 analysis
 results/              # gitignored — outputs go to DBFS / object storage
 ```

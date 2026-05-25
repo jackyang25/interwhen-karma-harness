@@ -1,5 +1,5 @@
 # Databricks notebook source
-# DBTITLE 1,08 — Orchestrator
+# DBTITLE 1,02 — Orchestrator
 # MAGIC %md
 # MAGIC # 08 — Orchestrator: run all conditions, aggregate, report
 # MAGIC
@@ -26,10 +26,10 @@
 # MAGIC 3. B' (force tool use, secondary)
 # MAGIC 4. C (best-effort prompt verification)
 # MAGIC 5. D (post-hoc Sonnet verifier)
-# MAGIC 6. E (literal interwhen + semantic verifier)
+# MAGIC 6. E (interwhen VerifyMonitor + custom loop driver, semantic input verifier)
 # MAGIC
 # MAGIC **Before clicking Run All:**
-# MAGIC - Pilot each individual notebook (02–07) once to confirm the wiring works
+# MAGIC - Smoke-test once via 00_smoke_test before launching
 # MAGIC - Paste API keys in section 2
 # MAGIC - Confirm `IDM-H100GPU-Compute_*` is attached
 
@@ -179,6 +179,118 @@ server.wait_ready(timeout=900)
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ## 4.5 Schema-aligned extractor vocabulary (preflight)
+# MAGIC
+# MAGIC Walk every MCP calculator's input schema, dump to provenance, and
+# MAGIC regenerate the Sonnet extractor prompt from the field union. This
+# MAGIC keeps the extractor's vocabulary a deterministic function of MCP's
+# MAGIC current state — no hand-curated aliases, no synonym dictionary, no
+# MAGIC bridging logic between MCP and the verifier.
+# MAGIC
+# MAGIC Cached: if `provenance/mcp_calculator_schemas.json` already exists,
+# MAGIC the dump is skipped. Delete that file to force a rebuild (e.g.,
+# MAGIC after EkaCare adds a calculator).
+
+# COMMAND ----------
+
+# DBTITLE 1,Preflight: fetch MCP schemas + regenerate extractor prompt
+import asyncio
+import json as _pf_json
+import nest_asyncio
+nest_asyncio.apply()
+
+from fastmcp import Client
+from harness.karma_adapter.mcp_tools import MEDAI_MCP_URL, _run_async
+from harness.extraction.prompt_builder import regenerate_extractor_prompt
+
+_PROVENANCE = pathlib.Path("/dbfs/results/provenance")
+_RUNTIME    = pathlib.Path("/dbfs/results/_runtime")
+_PROVENANCE.mkdir(parents=True, exist_ok=True)
+_RUNTIME.mkdir(parents=True, exist_ok=True)
+
+SCHEMA_DUMP_PATH      = _PROVENANCE / "mcp_calculator_schemas.json"
+RUNTIME_EXTRACTOR_PATH = _RUNTIME    / "extractor_prompt.txt"
+
+
+def _as_text(call_result):
+    return "".join(b.text for b in call_result.content if hasattr(b, "text"))
+
+
+async def _dump_all_calculator_schemas():
+    """Walk MCP: list categories → list calculators per category → get each
+    calculator's input schema. Returns the full dump dict."""
+    async with Client(MEDAI_MCP_URL) as c:
+        # 1. Categories
+        r = await c.call_tool("medical_calculator_list", {"intent": "categories"})
+        categories = _pf_json.loads(_as_text(r))
+
+        # 2. Calculators per category
+        all_calcs = []
+        for cat_obj in categories:
+            cat = cat_obj["category"]
+            r2 = await c.call_tool("medical_calculator_list",
+                                    {"intent": "calculators", "category": cat})
+            for calc in _pf_json.loads(_as_text(r2)):
+                all_calcs.append({
+                    "category":        cat,
+                    "name":            calc["name"],
+                    "normalized_name": calc["normalized_name"],
+                })
+
+        # 3. Per-calculator input schemas
+        per_calc, failures = {}, []
+        for i, calc in enumerate(all_calcs, 1):
+            try:
+                r3 = await c.call_tool("medical_calculator_input",
+                                        {"calculator_name": calc["normalized_name"]})
+                per_calc[calc["normalized_name"]] = {
+                    "category": calc["category"],
+                    "name":     calc["name"],
+                    "schema":   _pf_json.loads(_as_text(r3)),
+                }
+            except Exception as e:
+                failures.append({"calc": calc["normalized_name"],
+                                  "error": f"{type(e).__name__}: {e}"})
+            if i % 50 == 0:
+                print(f"  ...{i}/{len(all_calcs)} schemas fetched")
+
+        # 4. Field union for quick reference (also recoverable from per_calc)
+        all_fields = set()
+        for cd in per_calc.values():
+            all_fields.update((cd["schema"].get("properties") or {}).keys())
+
+        return {
+            "n_categories":         len(categories),
+            "n_calculators_listed": len(all_calcs),
+            "n_schemas_fetched":    len(per_calc),
+            "n_failures":           len(failures),
+            "field_union":          sorted(all_fields),
+            "per_calc_schemas":     per_calc,
+            "failures":             failures,
+        }
+
+
+# Run the preflight (cached unless the dump file is missing).
+if SCHEMA_DUMP_PATH.exists():
+    print(f"[preflight] schema dump cached at {SCHEMA_DUMP_PATH} — skipping fetch")
+    print(f"[preflight]   (delete it to force a rebuild)")
+else:
+    print(f"[preflight] dumping MCP calculator schemas to {SCHEMA_DUMP_PATH}...")
+    dump_data = _run_async(_dump_all_calculator_schemas())
+    SCHEMA_DUMP_PATH.write_text(_pf_json.dumps(dump_data, indent=2))
+    print(f"[preflight]   {dump_data['n_schemas_fetched']}/{dump_data['n_calculators_listed']} "
+          f"calculator schemas fetched ({dump_data['n_failures']} failures)")
+    print(f"[preflight]   {len(dump_data['field_union'])} unique clinical field names")
+
+# Always regenerate the extractor prompt from the (now-current) dump.
+# The runtime prompt path is what FactExtractor reads (see _build_adapter('E')).
+meta = regenerate_extractor_prompt(SCHEMA_DUMP_PATH, RUNTIME_EXTRACTOR_PATH)
+print(f"[preflight] extractor prompt regenerated → {meta['output_path']}")
+print(f"[preflight]   {meta['n_fields']} fields, {meta['prompt_chars']} chars")
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC ## ⚙️ Orchestration knobs — edit before clicking Run All
 # MAGIC
 # MAGIC - `CONDITIONS_TO_RUN`: which conditions the orchestrator processes. The
@@ -195,44 +307,40 @@ server.wait_ready(timeout=900)
 
 # COMMAND ----------
 
-# DBTITLE 1,Cell 14
+# DBTITLE 1,Orchestration knobs (edit before clicking Run All)
 # ──────────────────────────────────────────────────────────────────────────────
-# Focused re-run: only conditions whose ADAPTER CODE changed in the 2026-05
-# instrumentation patch, plus the new B_prime_E condition.
+# Focused re-run: only conditions whose verifier behavior changed in the
+# schema-aligned vocabulary rebuild (extractor prompt regenerated from MCP
+# schemas; semantic.py simplified to exact-name lookup).
 #
-#   D          → harness/verifier/posthoc.py gained primary_/verifier_ breakouts
-#   E          → inline _VerifiedAdapter gained extractor_/qwen3_ breakouts
-#                + violations_history JSON column
-#   B_prime_E  → brand new condition (never run before)
+#   E          → uses the deterministic semantic verifier; needs the fix
+#   B_prime_E  → same verifier, with the B' system prompt
 #
-# A, B, C, B_prime are intentionally LEFT OUT — their adapters (Qwen3Adapter
-# with use_tools True/False) are unchanged, so re-running them would produce
-# identical accuracy values and just spend GPU time. 09_analysis loads them
-# from their existing parquets; its _col_or_zero helper handles the older
-# schema gracefully (new breakout columns default to 0 for legacy data).
+# A, B, C, B_prime, D are intentionally LEFT OUT — their adapters are unchanged
+# since the previous run (Qwen3Adapter for A/B/C/B', PostHocVerifierAdapter for
+# D), and D's parquet already has the primary_/verifier_ breakouts from the
+# previous round. Re-running them would produce identical results and just
+# burn GPU + Sonnet API.
 #
-# FORCE_RERUN=True is REQUIRED for this run — D and E already have summary.json
-# files from prior runs, and without the override they'd be skipped as
-# "already complete". BACKUP_LEGACY=True (default) moves the previous D and E
-# parquets into timestamped _backup_<ts>/ subdirs before the fresh data writes,
-# so the old data is preserved if you need to inspect it later.
+# FORCE_RERUN=True is REQUIRED — E and B_prime_E already have summary.json
+# files. Without the override they'd be skipped as "already complete".
+# BACKUP_LEGACY=True (default) moves their existing parquets into timestamped
+# _backup_<ts>/ subdirs before the fresh data writes.
 #
-# To run EVERYTHING from scratch later (e.g., final reproducibility pass),
-# restore:
+# To run EVERYTHING from scratch (final reproducibility pass), restore:
 #   CONDITIONS_TO_RUN = ["A", "B", "B_prime", "C", "D", "E", "B_prime_E"]
 # ──────────────────────────────────────────────────────────────────────────────
-CONDITIONS_TO_RUN = ["D", "E", "B_prime_E"]
-FORCE_RERUN = True         # override idempotency: D and E already have summary.json
+CONDITIONS_TO_RUN = ["E", "B_prime_E"]
+FORCE_RERUN = True         # override idempotency: E and B_prime_E have prior summary.json
 BACKUP_LEGACY = True       # move any existing parquet to _backup_<ts>/ before a fresh run
 
 # COMMAND ----------
 
-# DBTITLE 1,Infrastructure
 # MAGIC %md ## 5. Infrastructure
 
 # COMMAND ----------
 
-# DBTITLE 1,Cell 16
+# DBTITLE 1,Imports, paths, WORKERS, system-prompt routing
 import json
 import time
 import traceback
@@ -261,8 +369,6 @@ WORKERS = {
 PILOT_N = 10
 
 
-# ── Condition routing ───────────────────────────────────────────────────────────────────
-
 def _system_for(cond: str) -> str | None:
     """Return the locked system prompt for the condition, or None for no system prompt.
 
@@ -274,8 +380,8 @@ def _system_for(cond: str) -> str | None:
     mapping = {
         "A":         None,    # no system prompt
         "B":         None,
-        "B_prime":   REPO_ROOT / "conf/prompts/condition_b_prime.txt",
-        "C":         REPO_ROOT / "conf/prompts/condition_c.txt",
+        "B_prime":   REPO_ROOT / "prompts/condition_b_prime.txt",
+        "C":         REPO_ROOT / "prompts/condition_c.txt",
         "D":         None,    # no system prompt; verifier has its own prompt
         "E":         None,
         # B_prime_E (exploratory, post-hoc): same locked B' system prompt — no new
@@ -284,12 +390,14 @@ def _system_for(cond: str) -> str | None:
         # This isolation matters: if we created a third "merged" prompt, we'd be
         # testing two variables at once. Reusing the literal B' prompt keeps
         # the only difference vs E the system-message channel.
-        "B_prime_E": REPO_ROOT / "conf/prompts/condition_b_prime.txt",
+        "B_prime_E": REPO_ROOT / "prompts/condition_b_prime.txt",
     }
     p = mapping.get(cond)
     return p.read_text().strip() if p is not None else None
 
+# COMMAND ----------
 
+# DBTITLE 1,Adapter builder (A/B/C/B', D, E + B_prime_E)
 def _build_adapter(cond: str):
     """Return the adapter instance for the given condition."""
     if cond in ("A", "B", "B_prime", "C"):
@@ -302,7 +410,7 @@ def _build_adapter(cond: str):
         primary = Qwen3Adapter(base_url=server.base_url, use_tools=True)
         return PostHocVerifierAdapter(
             primary=primary,
-            verifier_prompt_path=str(REPO_ROOT / "conf/prompts/condition_d.txt"),
+            verifier_prompt_path=str(REPO_ROOT / "prompts/condition_d.txt"),
             verifier_model="claude-sonnet-4-6",
         )
     if cond in ("E", "B_prime_E"):
@@ -339,11 +447,22 @@ def _build_adapter(cond: str):
         _MAX_TURNS  = 10
         _THINK_RE   = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
+        # The schema-aligned runtime extractor prompt is generated by the
+        # preflight cell from MCP's per-calculator schemas. There is no
+        # fallback — if this file is missing, preflight didn't run and we
+        # halt rather than silently use a stale/incompatible schema.
+        if not RUNTIME_EXTRACTOR_PATH.exists():
+            raise FileNotFoundError(
+                f"Runtime extractor prompt not found at {RUNTIME_EXTRACTOR_PATH}. "
+                f"The schema-dump preflight cell (§4.5) must run before E/B_prime_E. "
+                f"Run that cell, or delete /dbfs/results/provenance/mcp_calculator_schemas.json "
+                f"to force a fresh fetch + regeneration."
+            )
         extractor         = FactExtractor(
-            prompt_path=str(REPO_ROOT / "conf/prompts/extractor.txt"),
+            prompt_path=str(RUNTIME_EXTRACTOR_PATH),
             model="claude-sonnet-4-6",
         )
-        feedback_template = (REPO_ROOT / "conf/prompts/condition_e_feedback.txt").read_text()
+        feedback_template = (REPO_ROOT / "prompts/condition_e_feedback.txt").read_text()
         tools             = fetch_tool_schemas()
         tokenizer         = AutoTokenizer.from_pretrained(_MODEL_ID)
         client            = OpenAI(base_url=server.base_url, api_key="EMPTY")
@@ -451,7 +570,6 @@ def _build_adapter(cond: str):
                 return Qwen3Response(
                     text=text,
                     n_tool_calls=n_tool_calls,
-                    raw_prompt=rendered,
                     raw_completion=rolling_prompt[len(rendered):],
                     stop_reason="stop",
                     # Honest totals = extractor (Sonnet) + Qwen3 (on-GPU vLLM).
@@ -469,14 +587,18 @@ def _build_adapter(cond: str):
                     qwen3_elapsed_s=qwen3_elapsed_s,
                     # Per-row structured verifier events (failure analysis input).
                     violations_history=list(monitor.metrics.violations_history),
+                    # The extracted patient facts the verifier was comparing
+                    # against. Lets analysts see why a row had/didn't have
+                    # violations without re-running Sonnet.
+                    extracted_facts=dict(facts.raw) if facts.extractor_ok else {},
                 )
 
         return _VerifiedAdapter()
     raise ValueError(f"Unknown condition: {cond}")
 
+# COMMAND ----------
 
-# ── Orchestration helpers ───────────────────────────────────────────────────────────────
-
+# DBTITLE 1,Orchestration helpers (out_dir, idempotency, backups)
 def _out_dir(cond: str, kind: str) -> Path:
     return RESULTS_ROOT / f"qwen3_condition_{cond}_{kind}"
 
@@ -505,7 +627,9 @@ def _backup_existing_results(cond: str) -> Path | None:
     print(f"[{cond}] backed up {len(moved)} files from {full} → {backup_root}")
     return backup_root
 
+# COMMAND ----------
 
+# DBTITLE 1,run_condition — per-condition pilot + full
 def run_condition(cond: str) -> dict:
     """Run pilot + full for one condition, idempotent + error-tolerant."""
     record = {"condition": cond, "started_at": time.time()}
@@ -577,8 +701,16 @@ def run_condition(cond: str) -> dict:
 
 # COMMAND ----------
 
-# DBTITLE 1,Smoke-test E adapter (run before full job)
-# Run this cell BEFORE Cell 18 to verify the E adapter mechanics work.
+# MAGIC %md ## 6. (Optional) Smoke-test the E adapter
+# MAGIC
+# MAGIC Diagnostic, not required for the run loop below. Verifies the E adapter
+# MAGIC wiring on 3 vignettes (MCP dispatch, verifier fires, tool_response
+# MAGIC injection). Skip on a known-good config.
+
+# COMMAND ----------
+
+# DBTITLE 1,Smoke-test E adapter
+# Run this cell BEFORE the run-all loop to verify the E adapter mechanics work.
 # Checks:
 #   n_tool_calls > 0   → MCP tools are actually being dispatched
 #   n_model_calls      → > n_tool_calls means verifier fired at least once
@@ -611,7 +743,7 @@ print("\nSmoke test done. If n_tool_calls > 0 and tool_response is True on any v
 
 # COMMAND ----------
 
-# MAGIC %md ## 6. Run all conditions
+# MAGIC %md ## 7. Run all conditions
 
 # COMMAND ----------
 
@@ -639,20 +771,19 @@ for r in run_records:
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Save run records
+# MAGIC %md ## 8. Save run records
 
 # COMMAND ----------
 
-# DBTITLE 1,Cell 24
+# DBTITLE 1,Save aggregated run records
 out_path = RESULTS_ROOT / "_AGGREGATED_RESULTS.json"
 out_path.write_text(json.dumps({"run_records": run_records, "completed_at": time.time()}, indent=2, default=str))
 print(f"Run records written to: {out_path}")
-print("\nNext: open 09_analysis and run all cells for the full analysis + export bundle.")
+print("\nNext: open 03_analysis and run all cells for the full analysis + export bundle.")
 
 # COMMAND ----------
 
-# DBTITLE 1,Cell 25
-# MAGIC %md ## 8. Cleanup
+# MAGIC %md ## 9. Cleanup
 
 # COMMAND ----------
 

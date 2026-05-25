@@ -5,9 +5,9 @@ After the primary model produces an answer, a separate verifier model (Sonnet
 candidate answer and flags inconsistencies. On flag, the primary model is
 asked to revise once.
 
-Design decisions (locked in pre-registration):
+Design decisions (locked before production runs):
 - Verifier model: Claude Sonnet 4.6
-- Verifier prompt: `conf/prompts/condition_d_prime.txt`
+- Verifier prompt: `prompts/condition_d.txt`
 - Revision policy: one revision attempt on flag
 - Trigger: every primary-model answer (no skip-on-confidence heuristic)
 

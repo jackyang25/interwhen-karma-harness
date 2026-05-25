@@ -10,8 +10,14 @@ venv/
 # Notebooks
 .ipynb_checkpoints/
 
-# Experiment outputs — large artifacts go to DBFS/object storage; small bundles
-# (summaries, manifests, per-row parquets) are committed under results/.
+# Experiment outputs — results bundles are too large to commit.
+# Only the documentation lives in git; everything else (per-condition
+# parquets, manifests, plots, raw CSVs, vLLM logs) is reproducible from
+# the per-condition parquets stored on DBFS.
+/results/**
+!/results/README.md
+!/results/RESULTS.md
+
 *.duckdb
 cache.db
 **/cache.db

@@ -155,6 +155,7 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         n_verifier_fires = getattr(resp, "n_verifier_fires", 0)
         n_fixes_applied = getattr(resp, "n_fixes_applied", 0)
         violations_history = getattr(resp, "violations_history", []) or []
+        extracted_facts = getattr(resp, "extracted_facts", {}) or {}
         # Cost / latency breakouts (populated by the E adapter; 0 elsewhere).
         # These let cost_latency_table separate Sonnet-API cost from on-GPU
         # inference, so deployment readers can see what's billed where.
@@ -182,6 +183,7 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         n_verifier_fires = 0
         n_fixes_applied = 0
         violations_history = []
+        extracted_facts = {}
         extractor_prompt_tokens = 0
         extractor_completion_tokens = 0
         extractor_elapsed_s = 0.0
@@ -232,6 +234,9 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         # JSON-encoded so the column survives both parquet and CSV cleanly.
         # Empty list "[]" for non-interwhen conditions.
         "violations_history": json.dumps(violations_history),
+        # JSON-encoded extracted patient facts (E and B'+E only; "{}" elsewhere).
+        # This is what the verifier was comparing planned tool args against.
+        "extracted_facts": json.dumps(extracted_facts),
         # Honest cost / latency breakouts. Zero for non-E conditions.
         "extractor_prompt_tokens": extractor_prompt_tokens,
         "extractor_completion_tokens": extractor_completion_tokens,
