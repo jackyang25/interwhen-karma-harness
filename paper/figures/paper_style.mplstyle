@@ -1,0 +1,57 @@
+# Matplotlib style for paper figures.
+# Mirror of paper/preamble.tex palette so plots and document share identity.
+#
+# Usage in notebooks/scripts:
+#   import matplotlib.pyplot as plt
+#   plt.style.use("paper/figures/paper_style.mplstyle")
+
+# ── Figure scaffolding ────────────────────────────────────────────────────
+figure.figsize        : 6.4, 4.0
+figure.dpi            : 150
+savefig.dpi           : 300
+savefig.bbox          : tight
+savefig.pad_inches    : 0.05
+figure.facecolor      : white
+axes.facecolor        : white
+
+# ── Spines / ticks / grid ─────────────────────────────────────────────────
+axes.spines.top       : False
+axes.spines.right     : False
+axes.edgecolor        : 4A4A4A
+axes.linewidth        : 0.8
+xtick.color           : 4A4A4A
+ytick.color           : 4A4A4A
+xtick.direction       : out
+ytick.direction       : out
+axes.grid             : True
+axes.grid.axis        : y
+grid.color            : E5E5E3
+grid.linestyle        : -
+grid.linewidth        : 0.6
+axes.axisbelow        : True
+
+# ── Typography ────────────────────────────────────────────────────────────
+font.family           : serif
+font.serif            : Latin Modern Roman, DejaVu Serif, serif
+font.size             : 10
+axes.titlesize        : 11
+axes.titleweight      : semibold
+axes.titlepad         : 12
+axes.labelsize        : 10
+axes.labelcolor       : 1A1A1A
+xtick.labelsize       : 9
+ytick.labelsize       : 9
+legend.fontsize       : 9
+legend.frameon        : False
+legend.handlelength   : 1.4
+legend.labelspacing   : 0.4
+
+# ── Color cycle ───────────────────────────────────────────────────────────
+# Default Matplotlib cycle replaced with paper palette in display order
+# (anchors → primary → exploratory → diagnostic).
+axes.prop_cycle       : cycler('color', ['B0B0B0', '4A4A4A', '9DC3E6', '4F81BD', '1F4E79', 'D9A066', 'B45A1F', '1F5F5B'])
+
+# ── Lines / markers ───────────────────────────────────────────────────────
+lines.linewidth       : 1.8
+lines.markersize      : 6
+errorbar.capsize      : 3

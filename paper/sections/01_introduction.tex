@@ -1,0 +1,93 @@
+\subsection{Motivation: Wrong Inputs Defeat Correct Calculators}
+\label{sec:intro_motivation}
+
+Clinical decision-support is increasingly delivered by large language
+models (LLMs) that call deterministic backend tools --- risk calculators,
+dosing engines, eligibility checks --- via a structured tool-calling
+interface. The deterministic backend is the easy part: a correctly
+implemented CHA\textsubscript{2}DS\textsubscript{2}-VASc calculator
+returns the right score on any input. The hard part is the boundary
+where the LLM hands the calculator its inputs. A correct calculator
+called with a transposed creatinine value, the wrong patient sex, or a
+miscoded comorbidity will return a plausible-but-wrong answer that no
+amount of downstream verification of the textual response can detect.
+
+Concretely, in the medical\_calculator\_eval benchmark used in this study,
+many vignettes admit only one ``correct'' calculator and one ``correct''
+input mapping. A model that names the right calculator but misreads
+the patient's sex from the case will receive a confidently wrong score
+and present it as the answer. The failure mode is structural: it lives
+at the LLM-to-tool input boundary, not in the calculator and not in
+the final textual summary.
+
+\subsection{Scope: Procedural Input Verification}
+\label{sec:intro_scope}
+
+We study \emph{procedural input verification} of tool calls: an
+intermediate intervention that inspects the JSON payload the LLM sends
+to a deterministic clinical calculator \emph{before} the calculator
+runs. This is distinct from output verification (re-checking the final
+textual answer), end-to-end outcome verification (was the diagnosis
+right?), and retrieval grounding (was the cited fact in the source?).
+The verification fires at one specific point in the agent loop: between
+the model emitting a \verb|<tool_call>| block and the MCP tool being
+invoked. The verifier compares each (field, value) pair the model
+proposes to dispatch against an independently extracted reference set
+of patient facts. If the case (and the extractor) say sex = female and
+the model proposes sex = male, the call is flagged and the model is
+asked to revise before the calculator runs.
+
+This is the scope of every claim in this paper. We do not study other
+verification surfaces, and our results say nothing about them directly.
+
+\subsection{The Verification Hypothesis}
+\label{sec:intro_hypothesis}
+
+We pre-registered three hypotheses, ordered by status:
+
+\textbf{H1 (primary, pre-registered).} An interwhen-style deterministic
+input verifier comparing each tool-call payload against patient facts
+extracted from the case reduces wrong-input failures on
+\toolname{medical\_calculator\_eval}.
+
+\textbf{H2 (exploratory).} Combining a system prompt that forces tool use
+(B$'$) with the verifier compounds the verifier's effect.
+
+\textbf{H3 (post-hoc diagnostic).} If H1 fails, replacing upfront
+full-schema extraction with per-tool-call focused extraction isolates
+whether the extractor architecture is the limiting factor.
+
+H1 was the pre-registered primary; H2 and H3 are explicitly exploratory.
+Throughout, we keep the families visually and statistically distinct so
+readers cannot inadvertently treat exploratory results as pre-registered.
+
+\subsection{Contributions and Roadmap}
+\label{sec:intro_contributions}
+
+This paper contributes the following. (i) An eight-condition evaluation
+of procedural input verification on a clinical tool-calling benchmark
+with pre-registered primary contrasts and clearly labeled exploratory
+follow-ups. (ii) A null primary result: no verifier configuration
+significantly improved over the no-verifier baseline. (iii) A large
+exploratory negative finding: combining tool-forcing with upfront-extraction
+verification reduced accuracy by 9.0 percentage points
+(McNemar $p \approx 10^{-15}$). (iv) A flag-composition diagnostic
+locating the harm in the upstream LLM fact extractor rather than in the
+verifier's comparison logic. (v) A follow-up condition that partially
+supports a schema-size mechanism for the extractor's failure --- and
+that, regardless of the accuracy verdict, is Pareto-improved on cost.
+
+We do \emph{not} claim that interwhen ``does not work.'' Our results
+adapt the mechanism to a setting that introduces an LLM-based reference
+layer absent from interwhen's original math and code domains, and that
+layer --- not the verifier --- is the binding constraint.
+
+The rest of the paper is organized as follows. \Cref{sec:bg_interwhen}
+reviews the interwhen mechanism and the clinical-tool-calling setting.
+\Cref{sec:methods_benchmark} describes the apparatus, conditions, and
+statistical analysis. \Cref{sec:results_gate} reports the apparatus gate
+and primary contrasts; \cref{sec:results_exploratory,sec:results_diagnostic,sec:results_reactive}
+develop the exploratory negative finding, diagnose its mechanism, and
+test the schema-size hypothesis. \Cref{sec:disc_summary} synthesizes
+what we did and did not show, and what this implies for deploying
+intermediate verification in clinical AI.

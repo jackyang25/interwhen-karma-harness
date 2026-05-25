@@ -1,0 +1,122 @@
+% Apparatus schematic for §3.3.
+%
+% Routing rules:
+%   - Main flow: straight horizontal/vertical only.
+%   - Tool response: ONE right angle. UP from MCP, then LEFT into primary.east.
+%     Use TikZ |- operator so the right angle is geometrically guaranteed
+%     (no diagonal segments due to mismatched y-coordinates).
+%   - Feedback wrap: leaves the BOTTOM of verify, wraps around the LEFT
+%     of the diagram, arrives at the TOP of primary. All four corners
+%     use a uniform clearance \pad so the halo around the diagram is
+%     visually balanced.
+%
+% Label rules: every arrow gets a consistent verb-form gerund
+%   (consults / dispatches / flags / tool response).
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\small,
+  >={Stealth[length=2.4mm]},
+  every node/.style={align=center},
+  box/.style={rectangle, rounded corners=2pt, draw=accentDark, line width=0.6pt,
+              minimum height=11mm, minimum width=34mm, inner sep=4pt,
+              fill=paleGray},
+  modelbox/.style={box, fill=accentLight, draw=accent, line width=0.8pt},
+  decisionbox/.style={diamond, draw=accent, line width=0.8pt, fill=white,
+                      inner sep=2pt, aspect=2.4, minimum width=30mm,
+                      minimum height=14mm},
+  toolbox/.style={box, fill=white, draw=warmGray},
+  arrow/.style={->, draw=accentDark, line width=0.6pt},
+  feedback/.style={->, draw=condBprimeE, line width=0.7pt, dashed},
+  cleanpath/.style={->, draw=condReactive, line width=0.7pt},
+  ret/.style={->, draw=accentDark, line width=0.6pt},
+]
+
+% ── Grid coordinates ───────────────────────────────────────────────
+\def\colL{0}        % left column x
+\def\colM{5.6}      % middle column x
+\def\colR{11.2}     % right column x
+\def\rowT{4.5}      % top row y
+\def\rowC{2.25}     % middle row y
+\def\rowB{0}        % bottom row y
+
+% Clearances for the feedback wrap-around halo.
+% Three independent knobs so you can tune each side without affecting
+% the others. Increase a value to push that side further from the
+% diagram; decrease to bring it closer.
+\def\padBelow{0.6}   % gap below verify before the path turns left
+\def\padLeft{1.2}    % gap left of the leftmost column (this is the LEFT channel)
+\def\padAbove{0.6}   % gap above primary before the path turns right and down
+
+% ── Nodes ──────────────────────────────────────────────────────────
+\node[box]      (case)      at (\colL,\rowT) {Patient vignette\\(natural language)};
+\node[modelbox] (extractor) at (\colL,\rowC) {\textbf{Sonnet extractor}\\\footnotesize $M_e$: case $\to$ \texttt{\{field: value\}}};
+\node[box]      (facts)     at (\colL,\rowB) {Patient facts\\(reference)};
+
+\node[modelbox]    (primary) at (\colM,\rowT) {\textbf{Qwen3 primary}\\\footnotesize $\langle$tool\_call$\rangle$ generator};
+\node[box]         (call)    at (\colM,\rowC) {Tool call payload\\\footnotesize\texttt{input\_data = \{...\}}};
+\node[decisionbox] (verify)  at (\colM,\rowB) {\textbf{verify}\\\footnotesize field-by-field};
+
+\node[toolbox] (mcp) at (\colR,\rowB) {MCP calculator\\(deterministic)};
+
+% ── Main flow (all straight) ───────────────────────────────────────
+\draw[arrow] (case)      -- (extractor);
+\draw[arrow] (extractor) -- (facts);
+\draw[arrow] (case)      -- (primary);
+\draw[arrow] (primary)   -- (call);
+\draw[arrow] (call)      -- (verify);
+\draw[arrow] (facts)     -- node[above, font=\footnotesize\itshape,
+                                  text=warmGray, yshift=0.5mm]
+                            {consults} (verify);
+\draw[cleanpath] (verify) -- node[above, font=\footnotesize\bfseries,
+                                    text=condReactive] {dispatches}
+                              (mcp);
+
+% ── Tool response: ONE right angle via |- operator ─────────────────
+% (mcp.north) |- (primary.east) automatically produces:
+%   1. Vertical segment UP from mcp.north to primary.east.y
+%   2. Right angle at the corner
+%   3. Horizontal segment LEFT to primary.east
+% No diagonals are possible because |- guarantees axis-aligned paths.
+\draw[ret] (mcp.north) |- (primary.east);
+% Label: anchored at center on the right vertical lane.
+\node[font=\footnotesize\itshape, text=warmGray,
+      anchor=center, rotate=90]
+  at (\colR+0.30, \rowC) {tool response};
+
+% ── Feedback wrap (left side, balanced halo with uniform \pad) ─────
+% Path corners (all axis-aligned):
+%   verify.south  → (verify.south.x, verify.south.y - \pad)   [DOWN]
+%                 → (colL - boxhalf - \pad, same y)             [LEFT]
+%                 → (same x, primary.north.y + \pad)            [UP]
+%                 → (primary.north.x, same y)                   [RIGHT]
+%                 → primary.north                              [DOWN]
+\coordinate (verifyBelow) at ($(verify.south)+(0,-\padBelow)$);
+\coordinate (leftLane)    at ($(case.west)+(-\padLeft,0)$);
+\coordinate (topLane)     at ($(primary.north)+(0,\padAbove)$);
+
+\draw[feedback]
+  (verify.south)
+    -- (verifyBelow)                           % DOWN
+    -- (leftLane |- verifyBelow)               % LEFT to the left lane
+    -- (leftLane |- topLane)                   % UP along the left lane
+    -- (primary.north |- topLane)              % RIGHT to above primary
+    -- (primary.north);                        % DOWN into primary.north
+
+% Labels positioned along the path:
+%   "flags" — short action label at the start of the dashed line
+%             (just to the right of where it leaves verify.south).
+%   "feedback re-prompt" — descriptive label on the left vertical lane,
+%             mirror-image of "tool response" on the right lane.
+\node[font=\footnotesize\bfseries, text=condBprimeE,
+      anchor=west]
+  at ($(verify.south)+(0.15,-0.3)$) {flags};
+\node[font=\footnotesize\itshape, text=condBprimeE,
+      anchor=center, rotate=90]
+  at ($(leftLane)+(-0.30,-2.25)$) {feedback re-prompt};
+
+\end{tikzpicture}
+\caption{Apparatus overview. Right: a clean tool call is dispatched to
+MCP. Dashed left: a verifier flag re-prompts the primary.}
+\label{fig:mechanism}
+\end{figure}

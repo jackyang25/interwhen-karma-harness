@@ -1,0 +1,348 @@
+% =============================================================================
+% RESULTS
+% Order: gate -> primary -> exploratory -> diagnostic -> follow-up -> cost.
+% Each subsection: question -> number -> bound on interpretation.
+% =============================================================================
+
+\subsection{Apparatus Gate}
+\label{sec:results_gate}
+
+We replicated Sonnet on Condition B (the no-verifier, tools-enabled
+baseline) and observed an accuracy of 80.4\% ($N=1066$).
+The pre-registered acceptance band is $[0.789, 0.849]$ --- within $\pm
+3$ pp of EkaCare's published 81.9\% Sonnet-on-B reference for the
+medical\_calculator\_eval benchmark~\citep{karma2024}. The gate passed ($\Delta = -1.51$ pp; the apparatus-gate JSON in the
+result bundle records the exact replication).
+Primary contrasts in \cref{sec:results_primary} are interpretable only
+because this gate held; we do not interpret Sonnet's number as a bound on
+Qwen3 itself. The gate's role is drift detection on the harness, not
+primary-model audit.
+
+\FloatBarrier
+\subsection{Primary Comparisons (Pre-Registered)}
+\label{sec:results_primary}
+
+\Cref{tab:accuracy} reports per-condition accuracy with Wilson 95\%
+confidence intervals; \cref{tab:mcnemar_primary} reports the four
+pre-registered McNemar contrasts at Bonferroni $\alpha = 0.0125$.
+
+% Hero figure: forest plot of all 8 condition accuracies with Wilson CIs.
+% Ordered narratively (anchors -> primary -> exploratory -> diagnostic);
+% color = family. Tells the story arc in one image.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{forest_accuracy.pdf}
+  \caption{Per-condition accuracy with Wilson 95\% confidence intervals
+  ($N=1066$). Color encodes condition family.}
+  \label{fig:forest}
+\end{figure}
+
+The headline number is null. None of the three verifier configurations
+significantly improved over B. Condition E --- the interwhen-style
+deterministic input verifier with upfront Sonnet extraction --- was numerically the
+worst primary condition at 48.7\% (vs B's 50.4\%; McNemar
+$p_{\text{Bonferroni}} = 0.157$, $\Delta = -1.7$ pp).
+Conditions C (prompt-only self-verify, 49.4\%) and D (post-hoc Sonnet
+verifier, 50.1\%) were also indistinguishable from B. The only
+significant primary contrast was B vs A (50.4\% vs 41.6\%, $\Delta = +8.8$
+pp, $p_{\text{Bonferroni}} \approx 10^{-10}$), confirming that the model
+does benefit from tool access --- the calculators reach correct answers
+when the model invokes them, which is the apparatus this study presupposes.
+
+\textit{What this does not show.} The null primary result does not mean
+``verification cannot help.'' It means that, in this benchmark with this
+primary model and this extractor, the procedural input-verification surface
+did not move accuracy at the pre-registered significance level. We turn
+in \cref{sec:results_exploratory,sec:results_diagnostic} to a mechanistic
+question that the null result cannot answer on its own: \emph{why didn't
+the verifier help, and would a different reference pipeline change that?}
+
+\FloatBarrier
+\subsection{Exploratory: The Tool-Forcing Negative Finding}
+\label{sec:results_exploratory}
+
+The B$'$ system prompt --- which instructs the model to commit to a tool
+call rather than answering from prior knowledge --- moved accuracy from
+50.4\% to 72.7\% (McNemar $p \approx 10^{-42}$, 270 wrong$\rightarrow$right
+vs 32 right$\rightarrow$wrong). Mean tool calls per vignette rose from
+0.6 to 3.7. This is a large, clear, and exploratory effect; we treat B$'$
+as an exploratory \emph{baseline} for the combination conditions that
+follow.
+
+% Discordant-pairs Sankey: the visual smoking gun.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\linewidth]{discordant_flow.pdf}
+  \caption{Paired-outcome contingency for B$'$ vs B$'$+E ($N=1066$).
+  Off-diagonal cells are the discordant pairs McNemar's test operates on.}
+  \label{fig:discordant_flow}
+\end{figure}
+
+Adding the E verifier on top of B$'$ moved accuracy from 72.7\% to 63.7\%
+($\Delta = -9.0$ pp, McNemar $p \approx 10^{-15}$): the verifier
+\emph{actively hurt}. The discordant counts are the smoking gun:
+118 vignettes that were correct under B$'$ became wrong under B$'$+E,
+while only 22 went the other way. Among the 146 ``intervention rows''
+(vignettes where the verifier fired at least once), only 14\% ended
+correct --- the verifier was disproportionately re-prompting the model
+on cases it would otherwise have gotten right.
+
+This stands in sharp contrast to E alone (without B$'$), where the
+verifier fired on only 2.7\% of vignettes; under B$'$ the firing rate
+rose to 13.7\%. The mechanism is straightforward: B$'$ forces tool use,
+each tool call goes through the verifier, and each verifier flag
+re-prompts with feedback. Exposure to the verifier's reference scales
+with forced tool use.
+
+\textit{What this does not show.} It does not show that tool-forcing
+prompts are dangerous in general --- B$'$ \emph{alone} improved accuracy
+by 22.3 pp. The harm is an interaction effect between forced tool use
+and an \emph{unreliable reference}. The next subsection localizes the
+unreliability.
+
+\FloatBarrier
+\subsection{Diagnostic: Verifier Flag Composition}
+\label{sec:results_diagnostic}
+
+If the verifier's mechanical comparison were the problem, flags would
+distribute uniformly across the fields models actually use. They do not.
+Under B$'$+E, 343 of 1062 total flags (32.3\%) fired on a single field:
+\verb|sex|. The next-largest field was \verb|age| (7.6\%); the long tail
+was thin. \verb|sex| is among the easiest fields to extract correctly
+--- vignettes routinely state the patient's sex in the first sentence
+--- so a 32\% flag share is hard to attribute to genuine model error.
+It is far more parsimoniously attributed to the \emph{extractor}
+producing the wrong reference when asked, in a single Sonnet call, to
+populate a $\sim$500-field union schema spanning every calculator in
+the MCP toolset.
+
+% The diagnostic punchline.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\linewidth]{flag_composition.pdf}
+  \caption{Top-10 flagged fields under upfront (left) vs reactive
+  (right) extraction.}
+  \label{fig:flag_composition}
+\end{figure}
+
+Two further numerical observations support this attribution.
+First, the verifier's mechanical comparison is deterministic and
+field-blind: it has no notion that \verb|sex| is ``easy.'' Yet
+\verb|sex| dominates flags. Second, the per-field flag distribution
+is dense in fields the case typically states explicitly (sex, age,
+weight, height) and sparse in fields the case typically omits or
+states in non-canonical units. The pattern is consistent with an
+\emph{extractor} that misreads explicitly stated fields under
+attention pressure from a long, dense schema --- not with a
+\emph{verifier} that over-flags. The mechanism is the load on the
+extractor, not the strictness of the verifier.
+
+\FloatBarrier
+\subsection{Follow-Up: Reactive Extraction}
+\label{sec:results_reactive}
+
+Reactive extraction --- one Sonnet call per medical\_calculator\_output
+tool call, prompted only with the fields the model is about to populate
+--- yielded an accuracy of 65.6\% [62.7, 68.4]. Compared to upfront
+B$'$+E (63.7\%), this is a 1.9 pp numerical improvement that
+\emph{does not reach significance} (McNemar $p = 0.103$, 78 wrong$\rightarrow$right
+vs 58 right$\rightarrow$wrong). Compared to B$'$ (72.7\%), reactive
+still hurts: $\Delta = -7.1$ pp, $p \approx 10^{-12}$.
+
+The hypothesis going in was: \emph{if reactive recovers performance,
+schema size was the bottleneck}. The accuracy result alone does not
+support that. But three diagnostic markers move sharply in the
+predicted direction:
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{Sex share of flags fell from 32\% to 13\%.} This is the
+        most direct test of the schema-size hypothesis: the dominant
+        field flagged under upfront extraction was no longer dominant
+        under focused extraction. The flag distribution flattened
+        (\cref{fig:flag_composition}).
+  \item \textbf{Correct-rate on intervention rows doubled,
+        14\%$\rightarrow$24\%.} When the reactive verifier fired, the
+        vignette was more often resolved correctly than under upfront
+        firing --- the verifier's signals became more informative even
+        though it fired slightly more often (164 vs 146 intervention
+        rows).
+  \item \textbf{Total Sonnet input-token cost dropped by an order of
+        magnitude.} Mean Sonnet prompt tokens per vignette fell from
+        50{,}230 (upfront) to 1{,}122 (reactive) --- the focused prompts
+        are small, even summed across the $\sim$3.6 tool calls per
+        vignette. Total per-vignette tokens (Sonnet + Qwen3) dropped from
+        85.7K to 36.7K.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{trajectory_flow.pdf}
+  \caption{Per-vignette outcome trajectories across the three conditions
+  ($N=1066$), partitioned into six categories.}
+  \label{fig:trajectory_flow}
+\end{figure}
+
+The trajectory view (\cref{fig:trajectory_flow}) makes the
+nuance visible. The diagnostic markers shifted; accuracy did not. The
+cleanest interpretation is that \emph{schema-size attention dilution is
+one contributor to extractor unreliability but not the sole bottleneck}.
+Other plausible contributors --- Sonnet's free-text extraction quality
+on clinical narrative, verifier sensitivity on the long tail of
+correctly-flagged-but-genuinely-ambiguous cases, the propagation of
+feedback through subsequent regenerated tool calls --- remain
+candidates the design of this study cannot separate.
+
+We flag one design confound explicitly. Reactive performs $\sim$3.6
+sequential Sonnet calls per vignette; upfront performs one. We cannot
+disentangle ``smaller schema is easier'' from ``more independent
+extraction attempts converge'' without a third arm
+(multi-call full-schema extraction). The diagnostic-marker movements
+above are most consistent with the schema-size mechanism, but we cannot
+formally rule out an attempts-based mechanism contributing.
+
+\FloatBarrier
+\subsection{Per-Category and Stratified Effects}
+\label{sec:results_category}
+
+\Cref{fig:category_heatmap} shows per-condition accuracy across 24
+calculator categories. The B$'$+E negative effect is broadly distributed
+--- it appears in 17 of 24 categories and is not driven by one outlier
+category. On a stratified subset of 165 vignettes where every condition
+actually invoked tools (the \toolname{stratified\_tool\_subset.csv} file in the
+results bundle), the same pattern holds: B = 65.5\%,
+E = 50.3\%, B$'$+E = 60.6\%, B$'$+E reactive = 64.2\%. The reactive
+condition is closer to B and B$'$ than to upfront B$'$+E on the
+tool-invoking subset, hinting that the upfront extractor's harm is
+specifically realized through tool calls --- consistent with the
+input-verification mechanism --- and that focused extraction tightens
+this loop.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{category_heatmap.pdf}
+  \caption{Accuracy by calculator category $\times$ condition.}
+  \label{fig:category_heatmap}
+\end{figure}
+
+\FloatBarrier
+\subsection{Cost and Latency}
+\label{sec:results_cost}
+
+Cost matters because the headline tradeoff is not just ``does the
+verifier help?'' but ``at what price.'' \Cref{fig:pareto} plots the
+cost--accuracy frontier; \cref{tab:cost} summarizes the key numbers.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Total tokens per vignette and median wall-clock latency by
+  condition. ``API'' tokens are Sonnet calls (extractor + post-hoc
+  verifier in D). ``On-GPU'' tokens are Qwen3 via vLLM.}
+  \label{tab:cost}
+  \begin{tabular}{lrrr}
+    \toprule
+    Condition & Total tokens & API tokens & Latency (s) \\
+    \midrule
+    B                 &  8{,}152 &       0 & 123 \\
+    E                 & 59{,}798 & 50{,}543 &  87 \\
+    B$'$              & 29{,}908 &       0 & 408 \\
+    B$'$+E            & 85{,}702 & 50{,}353 & 223 \\
+    B$'$+E (reactive) & 36{,}749 &  1{,}416 & 223 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Two observations. First, upfront E and B$'$+E spend an enormous Sonnet
+budget on extraction: $\sim$50K prompt tokens per vignette, of which
+the verifier may consult only a handful of fields. Second, the reactive
+condition is \emph{cheaper} than upfront B$'$+E by $\sim$57\% total tokens
+($85.7K \rightarrow 36.7K$) and by $\sim$35$\times$ on Sonnet input
+tokens specifically ($50.4K \rightarrow 1.4K$). Even though reactive
+makes more Sonnet calls per vignette, each is small, and the larger
+context-window cost of upfront extraction is eliminated. The reactive
+condition is therefore Pareto-improved on cost \emph{without} a
+significant accuracy gain --- a real engineering result independent of
+the headline accuracy story.
+
+\Cref{fig:tokens} decomposes the per-condition cost into primary-model
+tokens (Qwen3, on-GPU vLLM) and external API tokens (Sonnet extractor in
+E/B$'$+E/reactive, Sonnet post-hoc verifier in D). The visual story is
+that the Sonnet budget under upfront extraction dwarfs every other cost
+component and is essentially eliminated under reactive extraction. The
+primary-model token cost is similar across B$'$, B$'$+E, and B$'$+E
+reactive --- forced tool use drives those tokens, not the verifier ---
+so the reactive savings come entirely from the extractor architecture.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{token_decomposition.pdf}
+  \caption{Per-vignette token cost decomposed into primary-model
+  (Qwen3) and external API (Sonnet) tokens.}
+  \label{fig:tokens}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\linewidth]{pareto.pdf}
+  \caption{Cost--accuracy frontier. Each point is one condition.}
+  \label{fig:pareto}
+\end{figure}
+
+% ─── Tables ────────────────────────────────────────────────────────────────
+\begin{table}[!htbp]
+  \centering
+  \caption{Per-condition accuracy with Wilson 95\% CIs ($N=1066$). Primary
+  contrasts marked with $\dagger$ are Bonferroni-corrected at family
+  $\alpha=0.05$.}
+  \label{tab:accuracy}
+  \begin{tabular}{lccc}
+    \toprule
+    Condition & Family & Accuracy & 95\% CI \\
+    \midrule
+    A                  & primary$^\dagger$  & 41.6\% & [38.6, 44.5] \\
+    B (baseline)       & primary$^\dagger$  & 50.4\% & [47.4, 53.4] \\
+    C                  & primary$^\dagger$  & 49.4\% & [46.4, 52.4] \\
+    D                  & primary$^\dagger$  & 50.1\% & [47.1, 53.1] \\
+    E                  & primary$^\dagger$  & 48.7\% & [45.7, 51.7] \\
+    B$'$               & exploratory        & 72.7\% & [70.0, 75.3] \\
+    B$'$+E             & exploratory        & 63.7\% & [60.8, 66.5] \\
+    B$'$+E (reactive)  & exploratory        & 65.6\% & [62.7, 68.4] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Primary McNemar contrasts (Bonferroni $\alpha=0.0125$).
+  Discordant pairs $(b, c)$: $b$ = correct in left, wrong in right;
+  $c$ = wrong in left, correct in right.}
+  \label{tab:mcnemar_primary}
+  \begin{tabular}{lcccc}
+    \toprule
+    Comparison & $b$ & $c$ & $p_{\text{Bonferroni}}$ & Sig.? \\
+    \midrule
+    B vs A & 145 &  51 & $1.2 \times 10^{-10}$ & \textbf{yes} \\
+    E vs B &  25 &  43 & $0.157$               & no  \\
+    E vs C &  77 &  85 & $1.0$                 & no  \\
+    E vs D &  26 &  41 & $0.349$               & no  \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Exploratory McNemar contrasts (uncorrected). Effect sizes
+  reported alongside $p$-values; these are \emph{not} in the primary
+  family.}
+  \label{tab:mcnemar_exploratory}
+  \begin{tabular}{lcccr}
+    \toprule
+    Comparison & $b$ & $c$ & $p$ & $\Delta$ acc \\
+    \midrule
+    B$'$ vs B                       & 270 &  32 & $2.4 \times 10^{-42}$ & $+22.3$ pp \\
+    B$'$+E vs B$'$                  &  22 & 118 & $9.8 \times 10^{-16}$ & $-9.0$ pp  \\
+    B$'$+E vs E                     & 229 &  69 & $3.2 \times 10^{-20}$ & $+15.0$ pp \\
+    B$'$+E reactive vs B$'$+E       &  78 &  58 & $0.103$               & $+1.9$ pp  \\
+    B$'$+E reactive vs B$'$         &  22 &  98 & $7.6 \times 10^{-12}$ & $-7.1$ pp  \\
+    \bottomrule
+  \end{tabular}
+\end{table}

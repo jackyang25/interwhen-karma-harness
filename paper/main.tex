@@ -1,0 +1,72 @@
+\documentclass[11pt]{article}
+
+\input{preamble}
+
+\title{Procedural Input Verification for Clinical Tool Calling:\\
+An Empirical Study of Interwhen Verifier-Guided Reasoning with LLM-Extracted References}
+
+\author{Jack Yang \and Jaeyoon Wang \and Aly Moosa}
+\makeatletter
+\renewcommand{\@affiliation}{Bill \& Melinda Gates Foundation}
+\makeatother
+
+\date{\today}
+
+\begin{document}
+\maketitle
+
+% ── Boxed abstract (custom callout style) ─────────────────────────────────
+\begin{abstractbox}
+\noindent\textbf{\color{accent}Abstract.}\quad
+\input{sections/00_abstract}
+\end{abstractbox}
+
+\vspace{8pt}
+
+% ── Key Findings highlight box ────────────────────────────────────────────
+\begin{findingsbox}
+\input{sections/00b_key_findings}
+\end{findingsbox}
+
+\vspace{8pt}
+
+\keywords{clinical AI safety, procedural input verification, verification, interwhen, large language models, reasoning trace, fact extraction, medical calculators, KARMA, Model Context Protocol, agent evaluation}
+
+\vspace{12pt}
+
+\section{Introduction}
+\input{sections/01_introduction}
+
+\section{Background}
+\input{sections/02_background}
+
+\section{Methods}
+\input{sections/03_methods}
+
+\section{Results}
+\input{sections/04_results}
+
+\section{Discussion}
+\input{sections/05_discussion}
+
+\section{Conclusion}
+\input{sections/06_conclusion}
+
+\section*{Code and Data Availability}
+\input{sections/07_availability}
+
+\section*{Funding and Conflicts of Interest}
+\input{sections/08_funding}
+
+\section*{Acknowledgments}
+\input{sections/09_acknowledgments}
+
+\bibliographystyle{abbrvnat}
+\bibliography{references}
+
+\clearpage
+\appendix
+\section{Reference Artifacts}
+\input{sections/10_appendix}
+
+\end{document}

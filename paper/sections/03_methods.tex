@@ -1,0 +1,250 @@
+\subsection{Benchmark and Primary Model}
+\label{sec:methods_benchmark}
+
+The benchmark is medical\_calculator\_eval (Hugging Face dataset
+\textit{ekacare/medical\_calculator\_eval}, test split, $N=1066$
+vignettes), released by EkaCare as part of the KARMA evaluation
+framework. We use the public release without modification. The primary
+model under evaluation is Qwen3-30B-A3B-Thinking-2507~\citep{qwen3_thinking},
+served via vLLM~\citep{vllm2023} on the text-completions endpoint with
+temperature $0.0$, top-$p$ $1.0$, max generation length $4096$ tokens,
+and a tool-calling loop bounded at $10$ turns. All runs are
+deterministic by construction: temperature is zero, the MCP schema dump
+is frozen at the start of a run, and the extractor prompt is regenerated
+byte-identically from the schema dump.
+
+The fact extractor used in conditions E, B$'$+E, and B$'$+E (reactive)
+is Claude Sonnet 4.6~\citep{claude_sonnet_4_6}, called with temperature $= 0.0$ and max\_tokens
+$= 8192$. The post-hoc verifier used in condition D is also Sonnet 4.6.
+We chose Sonnet rather than a sibling of Qwen3 to ensure the verifier's
+reference is not produced by the same model family as the primary, which
+would defeat the purpose of an external check.
+
+\subsection{Compute and Serving Infrastructure}
+\label{sec:methods_compute}
+
+Qwen3 is served by a single vLLM process on an Azure NC40ads-H100-v5
+instance (one NVIDIA H100 80\,GB GPU), running on Databricks Runtime
+17.3 (GPU/ML build, Scala 2.13). Inference uses the text-completions
+endpoint, not chat completions, so the custom tool-calling loop driver
+can intercept generation at \verb|</tool_call>| stop tokens. Per-condition
+runs are parallelized across vignettes via a process pool; the worker
+count ranges from 32 to 128 depending on per-vignette Sonnet pressure
+(higher pressure $\rightarrow$ lower concurrency to respect API rate
+limits). Sonnet calls are dispatched against Anthropic's public API;
+no model weights other than Qwen3 run locally. Per-condition GPU-hours
+and estimated cloud costs are recorded in each result bundle's
+provenance file. As one data point: the longest single-condition run
+(B$'$+E reactive) consumed 9{,}232 seconds of wall clock on the H100,
+estimated at \$7.69 of GPU time at current Azure on-demand pricing.
+
+\subsection{Conditions: Design and Purpose}
+\label{sec:methods_conditions}
+
+Eight conditions, four pre-registered as the primary family and four
+exploratory, are summarized in \cref{tab:conditions}. We describe each
+group below.
+
+\subsubsection{Capability Anchors}
+\label{sec:methods_anchors}
+
+Conditions A and B bound the room for verification to improve.
+\textbf{A} disables tools entirely and uses no system prompt; it is the
+floor and reports what the primary model can answer from internal
+knowledge alone. \textbf{B} enables MCP tools with no system prompt; it
+is the pre-registered baseline used for the apparatus gate. If
+Sonnet's accuracy on B falls within $\pm 3$ pp of the published 81.9\%
+reference, the harness is treated as drift-free.
+
+\subsubsection{Primary Verifier Conditions (Pre-Registered)}
+\label{sec:methods_primary}
+
+The primary family tests H1 by adding three different verification
+mechanisms to the B baseline.
+
+\textbf{C} (prompt-only self-verify) instructs the model in-prompt to
+verify its own reasoning before answering. No external machinery. This
+isolates whether the verifier signal needs to come from outside the
+model.
+
+\textbf{D} (post-hoc Sonnet verifier) keeps Qwen3 as the primary, but
+after the final answer is produced, sends (case, candidate answer) to a
+Sonnet verifier that may request one revision pass. D is an
+output-surface comparator, the closest analog to ``check the final
+answer'' approaches.
+
+\textbf{E} (interwhen-style deterministic input verifier) is the primary
+object of study. At each \verb|<tool_call>| Qwen3 emits, the verifier
+parses \toolname{arguments[``input\_data'']} and compares it field-by-field
+against the patient facts extracted upfront (one Sonnet call per
+vignette, full $\sim$500-field schema). On flag, the verifier injects
+feedback and re-prompts; on clean, it dispatches the MCP tool.
+
+\subsubsection{Exploratory: Tool-Forcing and Combination}
+\label{sec:methods_exploratory}
+
+\textbf{B$'$} (force tool use) enables tools and adds a system prompt
+that instructs the model to invoke a calculator rather than answering
+from prior knowledge. B$'$ tests whether the model's tool-use behavior
+is the lever, independent of any verifier.
+
+\textbf{B$'$+E} (force + verifier) combines the B$'$ system prompt with
+the E verifier. Critically, the adapter is identical to E's: the only
+delta is the system prompt. This isolation matters --- it lets us
+attribute any difference between E and B$'$+E to the system prompt and
+its downstream interaction with the verifier, not to two unrelated
+code paths.
+
+\subsubsection{Diagnostic: Reactive Fact Extraction}
+\label{sec:methods_reactive}
+
+\textbf{B$'$+E (reactive)} keeps the B$'$ system prompt and the
+verifier's comparison logic, model, and benchmark fixed. The only
+architectural change is the extractor's regime. Instead of one upfront
+Sonnet call over the full schema, the adapter performs one focused
+Sonnet call per \toolname{medical\_calculator\_output} tool call. At each
+such call, the adapter parses the requested field names from
+\verb|input_data|, renders a focused Sonnet prompt covering only those
+fields (typically 3--30, not 500), and runs extraction blind to the
+model's predicted values. The verifier then compares as before.
+This condition tests whether the extractor's full-schema architecture
+specifically is the limiting factor, with every other variable held
+constant.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Eight conditions, each isolating one factor in the
+  verification stack. Pre-registered primary family in italics.}
+  \label{tab:conditions}
+  \begin{tabular}{lcccc}
+    \toprule
+    Condition & Tools & System prompt & Verifier & Extractor \\
+    \midrule
+    \textit{A}         & no  & none      & none        & --                  \\
+    \textit{B (baseline)} & yes & none & none & --                  \\
+    \textit{C}         & yes & none      & prompt-only & --         \\
+    \textit{D}         & yes & none      & post-hoc Sonnet & --     \\
+    \textit{E}         & yes & none      & deterministic & upfront  \\
+    B$'$               & yes & force-tool & none       & --         \\
+    B$'$+E             & yes & force-tool & deterministic & upfront  \\
+    B$'$+E (reactive)  & yes & force-tool & deterministic & per-call \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{The Deterministic Input Verifier}
+\label{sec:methods_verifier}
+
+A note on naming. We deliberately call the verifier
+\emph{deterministic}, not \emph{semantic}. Its comparison logic is
+purely structural: exact match on enums, numeric tolerance on numbers,
+canonical-form match on booleans. It does not reason about paraphrase,
+implication, equivalent encodings, or context. A true semantic
+verifier would, for example, recognize \texttt{sex=1} and
+\texttt{sex=`female'} as referring to the same patient attribute; ours
+does not (see \cref{fig:loop_trace} for a vignette where this is
+precisely the failure mode). Calling the mechanism ``deterministic''
+both reflects what it does and clarifies what it cannot do: any harm
+or help we attribute to ``the verifier'' is the harm or help of
+\emph{this} comparison logic, not of intermediate-verification in
+general.
+
+\Cref{fig:mechanism} shows the data flow. For each \verb|<tool_call>|
+emitted by Qwen3, the verifier (a) parses
+\toolname{arguments[``input\_data'']} into (field, value) pairs;
+(b) for each pair, looks up the extractor's value for that field;
+(c) if the extractor has no value for the field, \emph{skips} the field
+(no flag, conservative no-op); (d) if both have values, applies a
+deterministic comparison --- exact match for enums, numeric match within
+tolerance for numbers, canonical form for booleans --- and flags on
+mismatch.
+
+\input{figures/mechanism.tex}
+
+On flag, the verifier injects a feedback template into the model's
+prompt --- naming the disagreeing field(s), the value the model
+proposed, and the value the extractor found --- and re-prompts. The
+MCP call is \emph{not} dispatched. The verbatim feedback template is
+reproduced in \cref{app:feedback_template}. On clean, the call is dispatched and the
+tool response is injected back into the prompt; the loop continues. On
+malformed JSON, the verifier requests a correction without comparison.
+
+Two properties of this design are critical. First, the verifier is
+\emph{blind} to whether the extractor was right. It only knows whether
+the model and the extractor disagree on a field both populated; the
+extractor's value is treated as ground truth by construction. Second,
+the verifier's ``no value $\rightarrow$ no flag'' rule conservatively
+suppresses false positives at the cost of being silent when the
+extractor misses a field entirely.
+
+\subsection{The Fact Extractor}
+\label{sec:methods_extractor}
+
+The extractor's vocabulary is generated deterministically from the MCP
+per-calculator JSON Schemas via the schema dump. Because both the
+extractor and the verifier consume the same schemas, the verifier
+\emph{cannot ask about a field the extractor cannot in principle emit},
+and the extractor cannot emit a field the MCP backend does not
+recognize. This vocabulary alignment is a structural property of the
+design, not a runtime invariant we have to police.
+
+\subsubsection{Upfront Variant (E, \texorpdfstring{B$'$+E}{B'+E})}
+\label{sec:methods_extractor_upfront}
+
+One Sonnet call per vignette, at run start, covering the full
+$\sim$500-field union schema. The result is fixed for the duration of
+the vignette and consulted on every tool-call interception. Per-vignette
+cost: one large Sonnet call (mean $\sim$50K prompt tokens, see
+\cref{tab:cost}). Latency: a fixed cost at run start.
+
+Across all $\sim$70 calculators in MedAI MCP, the union of property
+names exceeds 500 unique fields; the schema for any single calculator
+typically declares 3--30. One representative calculator's JSON Schema
+is reproduced verbatim in \cref{app:bmi_schema}.
+
+\subsubsection{Reactive Variant (\texorpdfstring{B$'$+E}{B'+E} reactive)}
+\label{sec:methods_extractor_reactive}
+
+One focused Sonnet call per \toolname{medical\_calculator\_output} tool call.
+At each such call, the adapter parses the keys of the model's proposed
+\verb|input_data|, builds a focused Sonnet prompt restricted to those
+fields, and runs extraction blind to the model's proposed values
+(the extractor sees field \emph{names} and the case text, never the
+values the model proposed). The result mutates the monitor's facts for
+the duration of that tool call's verification. Per-vignette cost
+scales with the number of \verb|_output| calls (mean $\sim$3.6 calls
+per vignette in our run); each call is small (typically 3--30 fields).
+
+The only architectural difference between the upfront and reactive
+variants is \emph{when} extraction happens and over \emph{what} schema
+slice. The verifier, the monitor, the MCP transport, the loop driver,
+and the response schema are byte-identical.
+
+\subsection{Pre-Registered Statistical Analysis}
+\label{sec:methods_stats}
+
+The primary family has four contrasts against B: E vs B, D vs B,
+C vs B, and B vs A. With family $\alpha = 0.05$ and Bonferroni
+correction over $n = 4$ tests, the per-test threshold is
+$\alpha = 0.0125$. The outcome is paired binary correctness per
+vignette; the test is McNemar's exact test~\citep{mcnemar1947} on the discordant pairs.
+Per-condition accuracies are reported with Wilson~\citep{wilson1927} 95\% confidence intervals. Effect sizes ($\Delta$ accuracy in percentage points) are
+reported alongside $p$-values. Exploratory contrasts
+(B$'$ vs B, B$'$+E vs B$'$, B$'$+E vs E, B$'$+E reactive vs B$'$+E,
+B$'$+E reactive vs B$'$) are not in the primary family, are not
+Bonferroni-corrected, and are labeled exploratory throughout
+\cref{sec:results_primary,sec:results_exploratory,sec:results_reactive}.
+
+\subsection{Apparatus Gate}
+\label{sec:methods_gate}
+
+Before accepting primary results, we replicated Sonnet on
+Condition B and required the resulting accuracy to fall within
+$[0.789, 0.849]$ --- $\pm 3$ pp of EkaCare's published 81.9\% reference
+for Sonnet on the medical\_calculator\_eval benchmark, reported in the
+KARMA framework release~\citep{karma2024}. The gate was specified in advance (see
+\verb|TESTING.md| in the harness repository) and is not adjustable
+post-hoc. Its purpose is drift detection on the harness, dataset,
+prompt rendering, and MCP transport. It is not a validation of the
+primary Qwen3 results --- we assume the harness behaves identically
+for the primary model conditional on the gate.

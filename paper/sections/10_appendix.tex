@@ -1,0 +1,75 @@
+% =============================================================================
+% APPENDIX
+% Reference artifacts that would interrupt the main narrative if placed inline:
+%   A.1 the verifier feedback template (verbatim)
+%   A.2 one MCP calculator's JSON Schema (verbatim, abbreviated)
+%   A.3 a real-data trace of a single vignette (bmi_001)
+% =============================================================================
+
+\subsection{Verifier Feedback Template}
+\label{app:feedback_template}
+
+The verifier's flag injects the following template into the primary
+model's prompt. The \toolname{\{violations\}} placeholder expands to a
+list of disagreeing fields, each annotated with the planned value, the
+extracted value, and a short diagnostic note.
+
+\begin{lstlisting}[caption={Verifier feedback prompt, verbatim from
+\toolname{prompts/condition\_e\_feedback.txt}.},
+label={lst:feedback}, language=]
+Your planned tool call has an input that does not match the patient case:
+
+{violations}
+
+Re-read the case carefully and call the tool again with corrected
+inputs. If the case truly does not specify the required input, do not
+invent a value; explain in your reply.
+\end{lstlisting}
+
+\subsection{Example MCP Calculator Schema}
+\label{app:bmi_schema}
+
+\Cref{lst:bmi_schema} shows one calculator's JSON Schema verbatim,
+abbreviated, to give a sense of the surface the extractor and verifier
+both consume. Across all $\sim$70 calculators in MedAI MCP, the union
+of property names exceeds 500 unique fields; the schema for any single
+calculator typically declares 3--30. The full per-calculator schema
+dump used at runtime ships with each result bundle's provenance
+directory.
+
+\begin{lstlisting}[caption={Abbreviated MCP JSON Schema for
+\toolname{bmi\_calculator\_body\_mass\_index}. The full schema includes
+descriptions, units, and range constraints for each field. Note that
+\texttt{sex} is declared but \emph{not} required; the BMI calculator
+will dispatch without it.}, label={lst:bmi_schema}, language=]
+{
+  "name": "bmi_calculator_body_mass_index",
+  "input_data": {
+    "type": "object",
+    "required": ["height", "mass"],
+    "properties": {
+      "sex":     { "$ref": "#/$defs/Sex", "description": "Biological sex" },
+      "height":  { "type": "number",  "description": "Height in meters" },
+      "mass":    { "type": "number",  "description": "Body weight in kilograms" },
+      "age":     { "type": "integer", "description": "Age in years" },
+      "athlete": { "$ref": "#/$defs/YesNo", "description": "Athletic status" }
+    }
+  }
+}
+\end{lstlisting}
+
+\subsection{Real-Data Trace: Vignette \texttt{bmi\_001}}
+\label{app:loop_trace}
+
+\input{figures/loop_trace.tex}
+
+\Cref{fig:loop_trace} walks through one real exemplar. Under upfront
+B$'$+E, the extractor populated a value for \texttt{sex} that the BMI
+calculator did not request; the model's tool call used a different
+serialization (\texttt{sex=1} vs the extracted \texttt{sex=`female'}),
+triggering an unresolvable type-mismatch loop that exhausted the turn
+budget. Under reactive extraction the focused prompt for the BMI
+calculator did not ask the extractor about \texttt{sex} at all, so no
+flag fired and the calculator dispatched cleanly. This is one of 67
+vignettes following the recover-by-reactive pattern in our run
+(\cref{fig:trajectory_flow}).

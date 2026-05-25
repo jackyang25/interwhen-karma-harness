@@ -1,0 +1,99 @@
+\subsection{Verifier-Guided Reasoning (Interwhen)}
+\label{sec:bg_interwhen}
+
+Interwhen~\citep{bhat2026interwhen} is a verifier-guided reasoning framework
+in which a \emph{VerifyMonitor} intercepts an LLM's generation at
+structured commit points, runs a verifier against the current state,
+and on violation injects feedback and re-prompts the model. The framework is mechanism-agnostic
+to the verifier itself: any computable predicate on the intermediate
+state can serve. Interwhen's original evaluations targeted math and
+code, where the reference for verification is the trace state itself
+(a partial proof, a partial program) and no external reference pipeline
+is required.
+
+We adapt the mechanism rather than re-implement it. Our intercept point
+is the moment the primary model emits a \verb|<tool_call>| block; our
+``trace state'' is the parsed tool-call JSON; our verifier is a
+deterministic field-by-field comparison against an external reference.
+We preserve interwhen's verify/fix semantics exactly --- on flag, inject
+feedback and re-prompt; on clean, dispatch the tool and continue ---
+and change only the transport. We use vLLM's text-completions endpoint
+with a custom synchronous loop driver rather than the streaming-completions
+variant, because the primary model is served behind a standard
+completions API. This is an implementation detail, not a methodological
+deviation.
+
+\subsection{Clinical Tool-Calling and KARMA}
+\label{sec:bg_karma}
+
+KARMA~\citep{karma2024} is a structured evaluation framework for medical
+AI published by EkaCare. We use its publicly released
+medical\_calculator\_eval benchmark ($N=1066$ vignettes spanning 24
+calculator categories, from cardiology to obstetrics) and the
+associated MedAI Model Context Protocol (MCP)
+toolset~\citep{medai_mcp}.
+
+The MCP toolset exposes six meta-tools, of which three are central to
+this study:
+\toolname{medical\_calculator\_list} enumerates available calculators;
+\toolname{medical\_calculator\_input} returns the JSON Schema for a chosen
+calculator's input; and \toolname{medical\_calculator\_output} dispatches the
+calculator with an \verb|input_data| payload. Each calculator carries a
+typed JSON Schema with enums, ranges, and field descriptions. The union
+of input field names across all calculators yields a vocabulary of
+$\sim$500 unique fields. This union is the reference vocabulary the
+verifier and extractor share, by construction --- both consume the
+schemas EkaCare ships, so neither can refer to a field the other does
+not know about.
+
+\subsection{Verification Surfaces: Where to Intervene}
+\label{sec:bg_surfaces}
+
+LLM-driven clinical AI admits intervention at several surfaces, which
+are often conflated in casual discussion. We distinguish:
+
+\textit{Input verification} (this paper). The verifier inspects the
+model's proposed tool-call arguments \emph{before} dispatch. Catches
+wrong inputs at the boundary where they would otherwise propagate
+into a deterministic backend. Fires at intermediate commit points;
+firing frequency scales with tool-call rate.
+
+\textit{Output verification.} The verifier reads the model's final
+textual answer and may request revision. Cannot catch a wrong tool
+input that produced a confidently-stated wrong answer unless the
+final text exposes the inconsistency. Condition D in our study is the
+closest output-style comparator.
+
+\textit{Grounding / retrieval-augmented verification.} The reference
+is retrieved text. A different problem class --- the question becomes
+``is the claim supported by retrieved evidence?'' rather than ``is the
+proposed input consistent with the case?'' Not evaluated here.
+
+\textit{Self-verification.} The model is asked, in-prompt, to check
+itself. No external reference. Condition C is our control for ``is any
+external machinery necessary?''
+
+This paper concerns the first surface. Every claim about ``the
+verifier'' refers to procedural input verification specifically.
+
+\subsection{The Reference-Extraction Problem}
+\label{sec:bg_reference}
+
+A subtlety unique to the clinical adaptation deserves explicit attention:
+\emph{the reference itself must come from somewhere}. In math and code,
+the trace state \emph{is} the reference --- the verifier can check a
+partial proof or compiled program against itself. In a clinical
+tool-calling setting, the case is presented as natural-language text,
+not as a structured record. Before the verifier can compare anything,
+the case must be parsed into field--value pairs. This parsing step is
+the introduction of a model-based component into a previously
+deterministic verification path, and it is where the verifier's safety
+guarantee can weaken.
+
+We use an external LLM of a different model family than the primary
+to produce the reference (specific model, version, and serving
+configuration in \cref{sec:methods_benchmark}). The cost of this
+design is that the extractor is itself an LLM, with its own
+distribution of errors. This paper's main finding is that those
+errors --- not the verifier mechanism --- bound the achievable
+accuracy.

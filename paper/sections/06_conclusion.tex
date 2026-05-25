@@ -1,0 +1,19 @@
+We evaluated interwhen-style procedural input verification on a clinical
+tool-calling benchmark and found that no pre-registered verifier
+configuration significantly improved over the no-verifier baseline.
+Under a tool-forcing system prompt, the verifier with upfront full-schema
+extraction actively reduced accuracy by 9.0 percentage points
+(McNemar $p \approx 10^{-15}$). A flag-composition diagnostic traced the
+harm to extractor unreliability --- a single field accounted for nearly
+a third of all verifier flags --- rather than to the verifier's
+mechanically correct comparison. A follow-up condition with reactive
+per-tool-call focused extraction partially supported the schema-size
+hypothesis (the dominant-field flag share more than halved and the
+intervention-row correct rate doubled) but did not significantly recover
+accuracy. The architecture was, however, $\sim$57\% cheaper in total
+tokens, making reactive a Pareto improvement on cost regardless of the
+accuracy verdict. The practical implication is that verifier-guided
+reasoning in clinical AI should be deployed only after the upstream
+reference pipeline is independently validated on the deployment's
+specific field set, since the verifier's correctness guarantee is no
+stronger than its reference.

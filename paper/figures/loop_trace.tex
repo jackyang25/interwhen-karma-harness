@@ -1,0 +1,74 @@
+% Real-data sequence trace for §5.3 using vignette bmi_001.
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\footnotesize,
+  >={Stealth[length=2.0mm]},
+  every node/.style={align=left},
+  node distance=3.5mm,
+  stepbox/.style={rectangle, rounded corners=2pt, line width=0.5pt,
+               inner sep=4.5pt, text width=118mm},
+  case/.style={stepbox, draw=warmGray, fill=paleGray},
+  primary/.style={stepbox, draw=accent, fill=accentLight},
+  verifier/.style={stepbox, draw=condBprimeE, fill=condBprimeE!10},
+  bad/.style={stepbox, draw=condBprimeE, fill=condBprimeE!18, line width=0.8pt},
+  good/.style={stepbox, draw=condReactive, fill=condReactive!12},
+]
+
+\node[case] (case) {%
+  \textbf{Vignette \texttt{bmi\_001}} (real exemplar from the bundle).\\
+  \textit{Case:} A 29-year-old \textbf{female} patient, weight 68\,kg,
+  height 1.6\,m. Compute her BMI.\\
+  \textit{Ground truth:} BMI $= 26.6$, tolerance $\pm 0.1$.};
+
+\node[primary, below=of case] (s1) {%
+  \textbf{Step 1.}\ \ Upfront extractor (Sonnet, full $\sim$500-field
+  schema) populates a reference set including \texttt{sex:\,female,
+  age:\,29, weight:\,68, height:\,1.6, bmi:\,26.56}. Sex is extracted
+  correctly.};
+
+\node[primary, below=of s1] (s2) {%
+  \textbf{Step 2.}\ \ Qwen3 (under B$'$) emits a tool call to
+  \toolname{medical\_calculator\_output} with
+  \texttt{input\_data=\{mass:\,68, height:\,1.6, sex:\,1\}}. The model
+  encodes \texttt{sex} as an integer (its preferred binary encoding)
+  even though the BMI calculator does not require this field.};
+
+\node[verifier, below=of s2] (s3) {%
+  \textbf{Step 3.}\ \ Verifier flags: extracted \texttt{sex=`female'}
+  (string) does not match planned \texttt{sex=1} (int). Note: ``value
+  type differs from the case (str vs int).'' MCP call is \emph{not}
+  dispatched; feedback re-prompt is injected.};
+
+\node[verifier, below=of s3] (s4) {%
+  \textbf{Step 4.}\ \ The cycle repeats eight times. The model tries
+  alternate encodings, the verifier keeps flagging on type mismatch
+  against the extractor's string reference, and the turn budget exhausts
+  before the BMI calculator ever runs.};
+
+\node[bad, below=of s4] (s5) {%
+  \textbf{Outcome (B$'$+E):}\ \ Final answer \texttt{nan}.
+  \emph{This vignette was correct under B$'$ alone}; the verifier
+  flipped a correct call into a failure mode.};
+
+\node[good, below=of s5, yshift=-1mm] (s6) {%
+  \textbf{Under reactive B$'$+E on the same vignette.}\ \ The model's
+  first tool call under reactive carries
+  \texttt{input\_data=\{mass:\,68, height:\,1.6, age:\,29\}}; the
+  focused extractor is asked only for those three fields, never returns
+  a value for \texttt{sex}, and the verifier's ``no extractor value
+  $\rightarrow$ no flag'' rule applies. The call dispatches; the BMI
+  calculator returns $26.56$. \textit{Final answer: 26.6 (correct).}};
+
+\draw[->, accent]      (case) -- (s1);
+\draw[->, accent]      (s1)   -- (s2);
+\draw[->, condBprimeE] (s2)   -- (s3);
+\draw[->, condBprimeE, dashed] (s3) -- (s4);
+\draw[->, condBprimeE] (s4)   -- (s5);
+
+\end{tikzpicture}
+\caption{Trace of vignette \texttt{bmi\_001}: an unrequested
+\texttt{sex} value in the upfront reference triggers a spurious
+flag-loop that reactive extraction avoids.}
+\label{fig:loop_trace}
+\end{figure}

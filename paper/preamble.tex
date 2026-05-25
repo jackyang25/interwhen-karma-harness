@@ -1,0 +1,235 @@
+% ---------- Encoding & fonts ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+% Linux Libertine: modern, readable academic serif. Pairs well with the
+% Biolinum sans-serif for headings. Much easier on the eye than Latin
+% Modern at body sizes for dense empirical prose.
+\usepackage{libertine}
+\usepackage[libertine]{newtxmath}
+\renewcommand*\familydefault{\rmdefault}
+\usepackage{microtype}
+
+% Slightly looser line spacing for readability (was default tight).
+\linespread{1.08}
+
+% ---------- Layout ----------
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{parskip}
+
+% ---------- Math ----------
+% Note: newtxmath (loaded above with libertine) provides AMS-style
+% symbols (\Bbbk, etc.) and proofs already. Loading amssymb or amsthm
+% on top causes "command already defined" errors. Only amsmath is needed.
+\usepackage{amsmath}
+
+% ---------- Figures & tables ----------
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+% float package provides [H] = "place here, exactly, no migration"
+\usepackage{float}
+
+% Generous spacing around floats so figures/tables don't crowd prose.
+\setlength{\textfloatsep}{16pt plus 3pt minus 3pt}  % between floats and main text
+\setlength{\floatsep}{14pt plus 3pt minus 3pt}      % between consecutive floats
+\setlength{\intextsep}{14pt plus 3pt minus 3pt}     % around floats placed inline ([h])
+\captionsetup{%
+  skip=8pt,
+  font=small,
+  labelfont=bf,
+  justification=justified,       % uniform: left-aligned with right-fill
+  singlelinecheck=false,         % don't auto-center single-line captions
+}
+
+% Allow more aggressive float placement: LaTeX considers more pages and
+% never delays a float past the end of its section.
+\usepackage{placeins}                               % provides \FloatBarrier
+\renewcommand{\topfraction}{0.85}                   % up to 85% of page for top floats
+\renewcommand{\bottomfraction}{0.65}
+\renewcommand{\textfraction}{0.10}                  % require at least 10% of page for text
+\renewcommand{\floatpagefraction}{0.75}
+\setcounter{topnumber}{3}                           % up to 3 floats at top of a page
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{5}
+
+% ---------- Diagrams & plots ----------
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, calc,
+                backgrounds, decorations.pathreplacing, shadows.blur}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{groupplots, statistics, fillbetween}
+
+% ---------- Code & verbatim ----------
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  showstringspaces=false,
+  captionpos=b,             % caption always BELOW the listing (matches figure convention)
+  abovecaptionskip=6pt,     % consistent spacing above the caption
+  belowcaptionskip=4pt,     % consistent spacing below the caption
+  aboveskip=10pt,           % consistent space between prose and listing
+  belowskip=10pt,
+}
+
+% ---------- Accent palette ----------
+% Deep teal as primary accent (clinical-modern, distinctive but not loud).
+% Used for rules, callout borders, links, and section underlines.
+\definecolor{accent}{HTML}{1F5F5B}
+\definecolor{accentLight}{HTML}{E6EFEE}
+\definecolor{accentDark}{HTML}{143F3C}
+\definecolor{warmGray}{HTML}{4A4A4A}
+\definecolor{paleGray}{HTML}{F7F7F5}
+
+% Qualitative palette for conditions, grouped by purpose so color
+% encodes family (a reader decodes the chart before reading the legend).
+% Anchors (A, B):           muted grays
+% Primary (C, D, E):        blues, increasing saturation
+% Exploratory (B', B'+E):   warm earth tones
+% Diagnostic (reactive):    accent teal
+\definecolor{condA}{HTML}{B0B0B0}
+\definecolor{condB}{HTML}{4A4A4A}
+\definecolor{condC}{HTML}{9DC3E6}
+\definecolor{condD}{HTML}{4F81BD}
+\definecolor{condE}{HTML}{1F4E79}
+\definecolor{condBprime}{HTML}{D9A066}
+\definecolor{condBprimeE}{HTML}{B45A1F}
+\definecolor{condReactive}{HTML}{1F5F5B}
+
+% ---------- Fancy boxes for callouts ----------
+\usepackage[most]{tcolorbox}
+
+% Abstract box: plain outlined rectangle, white background, thin border.
+% NOT breakable -- if it can't fit on the current page, the whole box moves
+% to the next page rather than splitting across a page break.
+\newtcolorbox{abstractbox}{%
+  enhanced,
+  colback=white,
+  colframe=warmGray,
+  boxrule=0.6pt,
+  arc=0pt,
+  outer arc=0pt,
+  left=14pt, right=14pt, top=12pt, bottom=12pt,
+  fontupper=\normalsize,
+}
+
+% Key findings highlight box: bolder, used once on page 1.
+% NOT breakable -- moves to next page as a unit rather than splitting.
+\newtcolorbox{findingsbox}{%
+  enhanced,
+  colback=accentLight,
+  colframe=accent,
+  boxrule=1pt,
+  arc=3pt,
+  outer arc=3pt,
+  left=14pt, right=14pt, top=10pt, bottom=10pt,
+  title=\textbf{Key Findings},
+  coltitle=white,
+  colbacktitle=accent,
+  fonttitle=\bfseries\large,
+  attach boxed title to top left={xshift=8pt, yshift=-8pt},
+  boxed title style={
+    colback=accent,
+    colframe=accent,
+    arc=2pt,
+    boxrule=0pt,
+    left=8pt, right=8pt, top=2pt, bottom=2pt,
+  },
+}
+
+% ---------- Citations ----------
+% Numeric citation style ([1], [2], ...) -- more compact and standard in
+% ML/clinical-AI venues; reduces in-line text density.
+\usepackage[numbers, square, sort&compress]{natbib}
+% xurl allows long URLs in the bibliography to break at any character,
+% preventing overflow into the margin. Must be loaded before hyperref.
+\usepackage{xurl}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentDark,
+  citecolor=accentDark,
+  urlcolor=accentDark,
+  pdftitle={Procedural Input Verification for Clinical Tool Calling: An Empirical Study of Interwhen-Style Verifier-Guided Reasoning with LLM-Extracted References},
+  pdfauthor={Jack Yang, Jaeyoon Wang, Aly Moosa},
+  pdfsubject={Verifier-guided reasoning for clinical decision support, applied to medical-calculator tool calls},
+  pdfkeywords={clinical AI, procedural input verification, verifier-guided reasoning, interwhen, reactive extraction, fact extraction, medical calculators, KARMA, Model Context Protocol, LLM evaluation},
+}
+
+% ---------- Custom commands ----------
+% Keywords block under the abstract (article class doesn't ship one).
+\providecommand{\keywords}[1]{%
+  \vspace{0.5em}\noindent\textbf{Keywords:} #1\par
+}
+
+% Semantic identifier styling. Use \toolname{} for tool names, schema
+% identifiers, file paths in flowing prose -- renders as italic so the
+% text breaks naturally at line ends (unlike \texttt{} which is rigid
+% monospace and causes overfull hboxes on long names). Reserve \texttt{}
+% only for short literal code values in prose (e.g., \texttt{sex=1}).
+\newcommand{\toolname}[1]{\textit{#1}}
+
+% ---------- Cross-references ----------
+\usepackage{cleveref}
+
+% ---------- Section heading styling ----------
+% Sans-serif headings (Biolinum, ships with libertine) — visually
+% distinct from the serif body, easier to scan, lighter than serif bold.
+\usepackage{titlesec}
+\titleformat{\section}
+  {\sffamily\Large\bfseries\color{accent}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\sffamily\large\bfseries\color{accentDark}}
+  {\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}
+  {\sffamily\normalsize\bfseries}
+  {\thesubsubsection}{0.6em}{}
+
+% ---------- Custom title block ----------
+% Replaces \maketitle with a distinctive layout: large title, thick
+% accent rule, author / affiliation / date in a clean three-line block.
+%
+% Note on \and: standard LaTeX \maketitle uses a tabular under the hood,
+% so \and expands to a tab mark (&). Our custom title is plain text, so
+% we locally redefine \and to render as a comma-space separator. This
+% keeps `\author{A \and B \and C}` working both ways.
+% Subject tag and affiliation rendered in the title block. Override
+% either with \renewcommand{...} in main.tex if needed.
+\makeatletter
+\newcommand{\@subject}{Artificial intelligence
+                       \,$\cdot$\, Intermediate-step verification
+                       \,$\cdot$\, Medical informatics}
+\newcommand{\@affiliation}{}   % empty by default; set in main.tex
+
+\renewcommand{\maketitle}{%
+  \begingroup
+  \renewcommand{\and}{\unskip,\ \ignorespaces}%
+  \noindent
+  {\color{accent}\rule{\linewidth}{0.4pt}}\par
+  \vspace{12pt}
+  \noindent{\sffamily\LARGE\bfseries\@title\par}
+  \vspace{8pt}
+  \noindent{\sffamily\small\itshape\color{accent}\@subject\par}
+  \vspace{12pt}
+  \noindent{\sffamily\large\@author\par}
+  \ifx\@affiliation\@empty\else
+    \vspace{3pt}
+    \noindent{\sffamily\small\itshape\color{warmGray}\@affiliation\par}
+  \fi
+  \vspace{4pt}
+  \noindent{\sffamily\small\color{warmGray}\@date\par}
+  \vspace{4pt}
+  \noindent{\color{accent}\rule{\linewidth}{0.4pt}}\par
+  \vspace{20pt}
+  \endgroup
+}
+\makeatother
