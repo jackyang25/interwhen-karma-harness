@@ -4,7 +4,30 @@
 The benchmark is medical\_calculator\_eval (Hugging Face dataset
 \textit{ekacare/medical\_calculator\_eval}, test split, $N=1066$
 vignettes), released by EkaCare as part of the KARMA evaluation
-framework. We use the public release without modification. The primary
+framework~\citep{karma2024}. We use the public release without
+modification.
+
+Each item is a single-turn task: a case-narrative vignette in
+natural-language prose, a target calculator, an \emph{expected
+numerical value} for a designated primary output field, and a
+per-item tolerance. There is no conversation --- the model receives
+the vignette once and produces a single response. Each item also carries a per-row \emph{confinement instruction} ---
+a prompt suffix that instructs the model to reply with a single JSON
+object containing the primary field --- which the adapter appends to
+the vignette before generation. Scoring is binary: the harness
+extracts a numerical prediction from the model's reply (preferring
+fenced JSON blocks, falling back to the last number in the text),
+and the item is marked correct iff
+$|\text{predicted} - \text{expected}| \le \text{tolerance}$. Parse
+failures and missing-field responses score as wrong. All accuracy
+numbers in this paper are this strict tolerance-based binary
+correctness, not partial-credit scores. Critically, the input is
+free-text prose rather than structured fields --- the reason an LLM
+extractor is required to populate the verifier's reference at all.
+Structured-input benchmarks (e.g., EHR-keyed inputs) would remove
+the extraction bottleneck this paper diagnoses. Curation details
+(vignette authorship, validation, calculator coverage) are
+documented in the KARMA release. The primary
 model under evaluation is Qwen3-30B-A3B-Thinking-2507~\citep{qwen3_thinking},
 served via vLLM~\citep{vllm2023} on the text-completions endpoint with
 temperature $0.0$, top-$p$ $1.0$, max generation length $4096$ tokens,
