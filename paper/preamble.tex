@@ -73,11 +73,30 @@
   breaklines=true,
   frame=single,
   showstringspaces=false,
-  captionpos=b,             % caption always BELOW the listing (matches figure convention)
-  abovecaptionskip=6pt,     % consistent spacing above the caption
-  belowcaptionskip=4pt,     % consistent spacing below the caption
-  aboveskip=10pt,           % consistent space between prose and listing
+  captionpos=b,
+  abovecaptionskip=6pt,
+  belowcaptionskip=4pt,
+  aboveskip=10pt,
   belowskip=10pt,
+  % UTF-8 support: listings cannot render non-ASCII bytes natively, so
+  % we declare ASCII fallbacks for the unicode glyphs that appear in
+  % the appendix prompts (em dash, micro sign, smart quotes, arrows).
+  extendedchars=true,
+  inputencoding=utf8,
+  literate=%
+    {—}{{---}}1
+    {–}{{--}}1
+    {µ}{{$\mu$}}1
+    {→}{{$\to$}}1
+    {“}{{``}}1
+    {”}{{''}}1
+    {‘}{{`}}1
+    {’}{{'}}1
+    {á}{{\'a}}1
+    {é}{{\'e}}1
+    {í}{{\'i}}1
+    {ó}{{\'o}}1
+    {ú}{{\'u}}1,
 }
 
 % ---------- Accent palette ----------
