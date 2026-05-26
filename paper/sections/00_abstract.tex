@@ -20,10 +20,13 @@ replacing upfront extraction with per-tool-call focused extraction
 \emph{partially} validated the schema-size hypothesis --- the sex
 fraction fell to 13\%, the correct-rate on intervention rows doubled
 (14\%$\rightarrow$24\%), and total token cost dropped $\sim$57\% --- but
-accuracy did not significantly recover (+1.9 pp, $p=0.103$). We conclude
+accuracy did not significantly recover (+1.9 pp, $p=0.103$), and
+median wall-clock latency was unchanged (per-call schema-size savings
+cancel against $\sim$3.6 sequential extraction calls). We conclude
 that in clinical settings where the verifier's reference must be
-LLM-extracted from free-text input, the binding constraint on
-verifier-guided reasoning is the reference pipeline, not the verifier.
-Schema-size is one contributor but not the sole bottleneck; deployment
-should validate the extractor on the relevant field set before adopting
-intermediate-verification machinery.
+LLM-extracted from free-text input, the binding constraint is
+\emph{jointly} the reference pipeline and the verifier's comparison
+surface: 58.6\% of B$'$+E violations fired on fields the target
+calculator did not require. Deployment should validate the extractor
+on the relevant field set \emph{and} schema-gate the verifier's
+comparisons before adopting intermediate-verification machinery.
