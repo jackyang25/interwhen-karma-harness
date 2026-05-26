@@ -449,6 +449,75 @@ def token_decomposition():
     print("[ok] token_decomposition.pdf")
 
 
+# ── Figure: Latency panels (latency vs accuracy + latency vs cost) ──────
+def latency_panels():
+    """Two-panel scatter complementing the Pareto: latency on the x-axis
+    for both panels, accuracy on the y-axis (left) and total tokens on
+    the y-axis (right). Makes the B'+E vs reactive 'identical latency,
+    different cost' story visible at a glance."""
+    cost_df = pd.read_csv(ANALYSIS / "cost_latency_table.csv").set_index("condition")
+    acc_df  = pd.read_csv(ANALYSIS / "accuracy_table.csv").set_index("condition")
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(10.6, 4.4))
+
+    # Hand-tuned label offsets per axis to avoid collisions.
+    LABEL_OFFSET_ACC = {
+        "A":                  ( 8,  0.020, "left",   "bottom"),
+        "B":                  ( 8, -0.022, "left",   "top"),
+        "C":                  ( 8,  0.022, "left",   "bottom"),
+        "D":                  ( 8,  0.000, "left",   "center"),
+        "E":                  ( 8,  0.005, "left",   "center"),
+        "B_prime":            (-10, 0.024, "right",  "bottom"),
+        "B_prime_E":          ( 8,  0.018, "left",   "center"),
+        "B_prime_E_reactive": ( 8, -0.022, "left",   "top"),
+    }
+    LABEL_OFFSET_TOK = {
+        "A":                  ( 8,  3,   "left",   "center"),
+        "B":                  ( 8,  3,   "left",   "center"),
+        "C":                  ( 8, -3,   "left",   "center"),
+        "D":                  ( 8,  3,   "left",   "center"),
+        "E":                  ( 8,  3,   "left",   "center"),
+        "B_prime":            (-10, 3,   "right",  "center"),
+        "B_prime_E":          (-10, 3,   "right",  "center"),
+        "B_prime_E_reactive": ( 8,  3,   "left",   "center"),
+    }
+
+    # ── Panel A: latency vs accuracy ─────────────────────────────────
+    for cond in CONDITION_ORDER:
+        x = cost_df.loc[cond, "median_latency_s"]
+        y = acc_df.loc[cond, "accuracy"]
+        axL.scatter(x, y, s=110, color=COLOR[cond], edgecolor="white",
+                    linewidth=1.6, zorder=4)
+        dx, dy, ha, va = LABEL_OFFSET_ACC[cond]
+        axL.text(x + dx, y + dy, PRETTY[cond], ha=ha, va=va,
+                 fontsize=10, color="#1A1A1A", zorder=5)
+
+    axL.set_xlabel("Median wall-clock latency per vignette (s)")
+    axL.set_ylabel("Accuracy")
+    axL.set_xlim(0, 450)
+    axL.set_ylim(0.36, 0.80)
+
+    # ── Panel B: latency vs total tokens ─────────────────────────────
+    for cond in CONDITION_ORDER:
+        x = cost_df.loc[cond, "median_latency_s"]
+        y = cost_df.loc[cond, "mean_total_tokens"] / 1000   # k-tokens
+        axR.scatter(x, y, s=110, color=COLOR[cond], edgecolor="white",
+                    linewidth=1.6, zorder=4)
+        dx, dy, ha, va = LABEL_OFFSET_TOK[cond]
+        axR.text(x + dx, y + dy, PRETTY[cond], ha=ha, va=va,
+                 fontsize=10, color="#1A1A1A", zorder=5)
+
+    axR.set_xlabel("Median wall-clock latency per vignette (s)")
+    axR.set_ylabel("Mean total tokens per vignette (thousands)")
+    axR.set_xlim(0, 450)
+    axR.set_ylim(-3, 100)
+
+    fig.tight_layout()
+    fig.savefig(FIG_DIR / "latency_panels.pdf")
+    plt.close(fig)
+    print("[ok] latency_panels.pdf")
+
+
 if __name__ == "__main__":
     forest_accuracy()
     discordant_flow()
@@ -457,4 +526,5 @@ if __name__ == "__main__":
     pareto()
     token_decomposition()
     trajectory_flow()
+    latency_panels()
     print(f"\nAll figures written to {FIG_DIR}")

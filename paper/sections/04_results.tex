@@ -7,16 +7,11 @@
 \subsection{Apparatus Gate}
 \label{sec:results_gate}
 
-We replicated Sonnet on Condition B (the no-verifier, tools-enabled
-baseline) and observed an accuracy of 80.4\% ($N=1066$).
-The pre-registered acceptance band is $[0.789, 0.849]$ --- within $\pm
-3$ pp of EkaCare's published 81.9\% Sonnet-on-B reference for the
-medical\_calculator\_eval benchmark~\citep{karma2024}. The gate passed ($\Delta = -1.51$ pp; the apparatus-gate JSON in the
-result bundle records the exact replication).
-Primary contrasts in \cref{sec:results_primary} are interpretable only
-because this gate held; we do not interpret Sonnet's number as a bound on
-Qwen3 itself. The gate's role is drift detection on the harness, not
-primary-model audit.
+Sonnet on Condition B reached 80.4\% accuracy ($N=1066$), within the
+pre-registered band defined in \cref{sec:methods_gate}. The gate
+passed ($\Delta = -1.51$ pp; the apparatus-gate JSON in the result
+bundle records the exact replication). Primary contrasts below are
+interpretable only because this gate held.
 
 \FloatBarrier
 \subsection{Primary Comparisons (Pre-Registered)}
@@ -258,8 +253,12 @@ condition is \emph{cheaper} than upfront B$'$+E by $\sim$57\% total tokens
 ($85.7K \rightarrow 36.7K$) and by $\sim$35$\times$ on Sonnet input
 tokens specifically ($50.4K \rightarrow 1.4K$). Even though reactive
 makes more Sonnet calls per vignette, each is small, and the larger
-context-window cost of upfront extraction is eliminated. The reactive
-condition is therefore Pareto-improved on cost \emph{without} a
+context-window cost of upfront extraction is eliminated. Median wall-clock
+latency is essentially unchanged (223\,s for both upfront and reactive
+B$'$+E): reactive trades one large Sonnet call for several smaller
+\emph{sequential} ones, so the time savings on schema length cancel
+against the increased call count. The reactive condition is therefore
+Pareto-improved on \emph{token cost} (not on latency) without a
 significant accuracy gain --- a real engineering result independent of
 the headline accuracy story.
 
@@ -285,6 +284,25 @@ so the reactive savings come entirely from the extractor architecture.
   \includegraphics[width=0.88\linewidth]{pareto.pdf}
   \caption{Cost--accuracy frontier. Each point is one condition.}
   \label{fig:pareto}
+\end{figure}
+
+Latency tells a different story than cost. \Cref{fig:latency} plots
+the same eight conditions against median wall-clock latency, with
+accuracy (left panel) and total tokens (right panel) on the y-axis.
+B$'$+E and B$'$+E (reactive) sit at \emph{identical} median latency
+(223\,s) despite reactive using $\sim$57\% fewer total tokens: the
+schema-size savings on each Sonnet call are offset by reactive making
+$\sim$3.6 sequential calls instead of one. For deployments that are
+token-budget-bound, reactive is the better choice; for deployments
+that are wall-clock-bound, it is not.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{latency_panels.pdf}
+  \caption{Latency vs accuracy (left) and latency vs token cost (right).
+  B$'$+E and B$'$+E (reactive) collapse to the same median latency,
+  separating only on the cost axis.}
+  \label{fig:latency}
 \end{figure}
 
 % ─── Tables ────────────────────────────────────────────────────────────────

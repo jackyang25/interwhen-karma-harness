@@ -74,8 +74,9 @@ verification reduced accuracy by 9.0 percentage points
 (McNemar $p \approx 10^{-15}$). (iv) A flag-composition diagnostic
 locating the harm in the upstream LLM fact extractor rather than in the
 verifier's comparison logic. (v) A follow-up condition that partially
-supports a schema-size mechanism for the extractor's failure --- and
-that, regardless of the accuracy verdict, is Pareto-improved on cost.
+supports a schema-size mechanism for the extractor's failure and
+substantially reduces token cost ($\sim$57\%) at unchanged median
+latency, independent of the accuracy verdict.
 
 We do \emph{not} claim that interwhen ``does not work.'' Our results
 adapt the mechanism to a setting that introduces an LLM-based reference

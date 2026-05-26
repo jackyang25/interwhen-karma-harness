@@ -10,23 +10,37 @@
 
 Four findings, ordered by certainty.
 
-\textbf{1. Procedural input verification did not improve accuracy.}
-In the pre-registered primary family (E, D, C vs B), no condition was
-significant at Bonferroni $\alpha = 0.0125$
-(\cref{sec:results_primary}). The only significant primary contrast was
-B vs A, which confirms tool access matters but says nothing about
-verification.
+\textbf{1. Procedural input verification with an LLM-extracted
+reference did not improve accuracy.} In the pre-registered primary
+family (E, D, C vs B), no condition was significant at Bonferroni
+$\alpha = 0.0125$ (\cref{sec:results_primary}). The only significant
+primary contrast was B vs A, which confirms tool access matters but
+says nothing about verification. We emphasize the qualifier
+``LLM-extracted'': because our reference itself is produced by Sonnet
+(empirically $\sim$80\% accurate on Condition B as a sanity check),
+this result cannot distinguish ``the verifier mechanism does not help''
+from ``the verifier mechanism does not help \emph{when its reference
+is imperfect}''. A condition with a ground-truth (hand-annotated)
+reference would separate these and is the most important comparator
+this study lacks (see \cref{sec:disc_limitations}).
 
 \textbf{2. Under forced tool use, the verifier actively hurt by 9.0 pp}
 (B$'$+E vs B$'$; $p \approx 10^{-15}$; 118 vs 22 discordant pairs;
 \cref{sec:results_exploratory}). This is one of the largest exploratory
 effects in the study and is in the wrong direction.
 
-\textbf{3. The harm came from the reference, not the verifier.} Flag
-composition is concentrated on \texttt{sex} (32\% of all flags under
-upfront extraction), a structurally easy field, implicating the
-\emph{extractor} (Sonnet on a $\sim$500-field flat schema) rather than
-the verifier's deterministic comparison (\cref{sec:results_diagnostic}).
+\textbf{3. The harm came jointly from the reference and the verifier's
+comparison surface.} Flag composition is concentrated on \texttt{sex}
+(32\% of all flags under upfront extraction), a structurally easy
+field. This implicates the \emph{extractor} (Sonnet on a $\sim$500-field
+flat schema) for populating fields the active tool call did not
+require. It \emph{also} implicates the verifier's design: of the 1{,}062
+total violations in B$'$+E, 622 ($58.6\%$) were on fields the target
+calculator's schema does not declare as required (181 of them on
+\texttt{sex} alone). A schema-gated verifier that compared only
+required fields would have suppressed those 622 violations without
+changing the extractor. Both design choices contributed; we discuss
+this jointly in \cref{sec:disc_extractor}.
 
 \textbf{4. Reactive per-tool-call extraction \emph{partially} supported
 the schema-size hypothesis.} Diagnostic markers moved as predicted ---
@@ -62,7 +76,54 @@ hence harm rather than help.
 Reactive extraction reduces term (b) for common fields, which is
 visible in the flag composition shifting away from \verb|sex|. It does
 not reduce term (b) enough to flip the cost balance significantly,
-which is why accuracy moves only 1.9 pp. Reactive is one design
+which is why accuracy moves only 1.9 pp.
+
+\medskip
+\noindent\textit{The extractor pipeline fails independently of
+end-to-end reasoning.}\quad
+A post-hoc check on the 118 harm cases (B$'$ correct $\rightarrow$
+B$'$+E wrong) makes the point sharper. Sonnet's apparatus-gate run on
+Condition B answered the same vignettes \emph{end-to-end} (read case,
+choose calculator, call tool, return answer) at 80.4\% accuracy.
+Of the 118 harm cases, Sonnet got the final answer right on \emph{101
+(86\%)} despite the upfront extractor's reference (a different Sonnet
+call with a different system prompt) being wrong enough on those rows
+to flip Qwen3's correct tool call into a wrong one. The odds ratio of
+harm given Sonnet-on-B-wrong is 2.40 --- Sonnet's overall reasoning
+failures do enrich the harm population --- but they explain only a
+small minority of it. The implication: the extractor's failure mode is
+not ``Sonnet does not understand the case'' but ``Sonnet, asked to
+populate a $\sim$500-field union schema with a different prompt, mis-pulls
+common fields even when it knows the case well enough to answer the
+underlying question.'' This reinforces the claim that the bottleneck
+is the \emph{upfront full-schema extraction architecture} specifically,
+not the model's clinical reasoning capacity.
+
+This also sharpens an important framing concern: because the reference
+itself is LLM-extracted, our experiment is partly evaluating
+\emph{alignment between two LLM pipelines} (Qwen3's tool-call inputs
+vs Sonnet's extracted reference) rather than the verifier mechanism in
+isolation. Replacing the extractor with structured records (point (i)
+below) would re-orient the same experiment toward a cleaner test of
+the verifier itself.
+
+\medskip
+\noindent\textit{The verifier's comparison surface is itself a design
+choice.}\quad
+The verifier in this study iterates over fields the primary model
+included in \texttt{input\_data}; it does not consult the target
+calculator's schema to ask whether a given field is required for the
+active call. A post-hoc audit finds that 622 of 1{,}062 B$'$+E
+violations (58.6\%) fired on fields the calculator does not declare as
+required --- the \texttt{bmi\_001} pattern (\cref{app:loop_trace}) is
+the dominant case, not an outlier. The diagnosis therefore restates
+precisely: the harm comes from the \emph{join} of (a) an extractor
+that populates fields the active tool call does not need and (b) a
+verifier whose comparison surface is the model's proposed inputs
+rather than the calculator's required inputs. Either redesign would
+address the \texttt{bmi\_001} class of failures; a schema-gated
+verifier variant, proposed in \cref{sec:disc_followups}, would test
+this directly. Reactive is one design
 dimension within the reference layer; others worth exploring include
 structured-EHR inputs (eliminating $M_e$ for fields the EHR carries),
 retrieval-augmented extraction (grounding $M_e$ on case-text spans
@@ -136,18 +197,90 @@ union of all possible MCP fields.
 
 \textit{Prefer focused per-call extraction over upfront full-schema
 extraction.} Reactive extraction did not significantly improve accuracy
-in our study, but it is Pareto-improved on cost ($\sim$57\% fewer total
-tokens, $\sim$35$\times$ fewer Sonnet input tokens) and on flag
-informativeness (correct-rate on intervention rows doubled). For any
-deployment that adopts interwhen-style verification, the reactive
-architecture appears to be a strict improvement over upfront extraction
-on every axis we measured.
+in our study, but it cuts token cost substantially ($\sim$57\% fewer
+total tokens, $\sim$35$\times$ fewer Sonnet input tokens) and improves
+flag informativeness (correct-rate on intervention rows doubled).
+Median wall-clock latency is unchanged because the sequential
+per-call Sonnet requests cancel the per-call schema-size savings, so
+deployments that are latency-bound rather than token-bound see no
+direct benefit from this swap. On every axis except latency, reactive
+appears to be a strict improvement over upfront extraction.
 
 \textit{Consider whether the reference can be non-LLM.} Where structured
 patient-record data exist (EHR fields, vital signs from devices,
 laboratory results from LIS), they should be preferred over LLM
 extraction. Reserve LLM extraction for fields the structured record does
 not carry --- and gate it field-by-field on observed accuracy.
+
+\subsection{Open Questions and Proposed Follow-Up Conditions}
+\label{sec:disc_followups}
+
+The diagnostic in this paper isolates one design axis at a time
+(extractor regime, in B$'$+E vs B$'$+E reactive) but leaves several
+others unexplored. \Cref{tab:followups} enumerates the conditions we
+view as the natural next experiments, each holding all other variables
+fixed at the values used in this study. Conditions are ordered by
+implementation cost, ascending.
+
+\begin{table}[H]
+  \centering
+  \caption{Proposed follow-up conditions, each designed to isolate one
+  design axis the present study did not vary. Costs are relative
+  estimates; ``small'' means $\lesssim 100$ lines of adapter code
+  reusing the existing harness, ``medium'' means new infrastructure but
+  using existing models, ``large'' means manual curation or a new
+  benchmark.}
+  \label{tab:followups}
+  \small
+  \begin{tabular}{p{0.30\linewidth}p{0.42\linewidth}p{0.18\linewidth}}
+    \toprule
+    Condition & What it isolates & Implementation cost \\
+    \midrule
+    Schema-gated verifier &
+      Verifier comparison surface: compare only fields the target
+      calculator declares as required. Directly tests whether
+      suppressing the 58.6\% non-required-field violations changes
+      the upfront-vs-reactive verdict. &
+      Small \\
+    Multi-call full-schema extraction &
+      Schema-size vs multi-attempts confound in reactive:
+      run the upfront extractor $K$ times and combine (vote /
+      intersect). If accuracy approaches reactive, the bottleneck
+      is multi-attempts; if not, schema size. &
+      Small \\
+    Deterministic type/range checker &
+      Pure structural compliance with no semantic comparison. Baseline
+      for ``how much does any procedural verification help, before any
+      semantic checking?'' &
+      Small \\
+    Multi-LLM ensemble extractor &
+      Single-model variance in the reference. Use $\geq 2$ extractor
+      models and require agreement (or vote) before populating the
+      verifier's reference. &
+      Medium \\
+    Hand-annotated ground-truth reference &
+      The verifier mechanism in isolation: removes the LLM-extracted
+      reference entirely and uses validated facts. Directly answers
+      whether procedural input verification helps when the reference
+      is reliable. &
+      Large (annotation of 1{,}066 vignettes) \\
+    Structured-record reference (e.g., EHR-keyed) &
+      Non-LLM reference layer for a deployment-realistic setting.
+      Requires a benchmark that ships structured patient records
+      alongside vignettes; \toolname{medical\_calculator\_eval} does
+      not. &
+      Out of scope (new benchmark) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent The schema-gated verifier (row 1) and multi-call full-schema
+extraction (row 2) are the highest-leverage single conditions: they
+each address one of the strongest open questions in this study --- the
+verifier's comparison surface and the reactive multi-attempts confound
+respectively --- and both reuse existing infrastructure. We treat them
+as the natural next experiments before a more ambitious sweep over
+reference types.
 
 \subsection{Limitations and Threats to Validity}
 \label{sec:disc_limitations}
@@ -174,14 +307,22 @@ different overall verdict on the verifier. Our claim is not that
 the binding constraint under upfront full-schema extraction; the
 mechanism is general, the specific numbers are not.
 
+\textit{No ground-truth-reference comparator.} We do not run a
+condition in which the verifier consults a hand-annotated reference
+set. Such a condition would isolate the verifier mechanism from the
+extractor's fallibility entirely and is the most important comparator
+the present study lacks; it is itemized in \cref{sec:disc_followups}
+with its cost.
+
 \textit{Multi-call vs schema-size confound in reactive.} The reactive
 condition makes $\sim$3.6 sequential Sonnet calls per vignette versus
-one for upfront. ``Smaller schema'' and ``more independent extraction
-attempts'' covary in our design. A third arm (multi-call full-schema
-extraction) would disentangle them. The diagnostic-marker movements
-in \cref{sec:results_diagnostic,sec:results_reactive} are most
-consistent with the schema-size mechanism, but we cannot formally
-rule out a multi-attempts contribution.
+one for upfront, so ``smaller schema'' and ``more independent
+extraction attempts'' covary in our design. The diagnostic-marker
+movements in \cref{sec:results_diagnostic,sec:results_reactive} are
+most consistent with the schema-size mechanism, but we cannot formally
+rule out a multi-attempts contribution. The disentangling condition
+(multi-call full-schema extraction) is proposed in
+\cref{sec:disc_followups}.
 
 \textit{Apparatus gate scope.} The gate validates Sonnet on Condition B
 within $[0.789, 0.849]$ and passed at 80.4\%. It is a drift detector
@@ -198,6 +339,24 @@ is observable only when the extractor is both active and wrong. A
 fully missing extraction is invisible to the firing-rate statistics ---
 some fraction of vignettes may have ``silent'' verifier failures we
 cannot count.
+
+\textit{Extractor stochasticity at $T=0$.} We ran post-hoc
+reproducibility checks comparing Sonnet's upfront extractions on the
+same vignettes across the E and B$'$+E runs (same model, same prompt,
+temperature$=0$, run on different sessions). \emph{Values} are highly
+stable when both runs commit to a value --- agreement is 100\% on
+\texttt{sex} (238/238 paired), 99.6\% on \texttt{age} (227/228), and
+99--100\% across other high-impact fields (\texttt{weight},
+\texttt{height}, \texttt{creatinine}, \texttt{diabetes}). \emph{Field
+presence} is less stable: for any single field, $\sim$5--10\% of paired
+vignettes have the field extracted on one side but not the other
+($\sim$5\% of all rows for \texttt{sex} specifically). This is
+consistent with documented non-determinism in Anthropic's API at
+$T=0$. Because of the conservative no-flag rule above, presence
+variance translates into \emph{missing} flags rather than wrong
+flags --- a different upfront B$'$+E run would likely have slightly
+fewer or more total flags but the same architectural pattern (a
+single common field dominating the flag composition).
 
 \subsection{What This Paper Does Not Claim}
 \label{sec:disc_notclaim}
@@ -236,9 +395,10 @@ reference, the amplification could just as well be positive.
 
 \textbf{5. ``B$'$+E reactive is the right deployment configuration.''}
 We report one mechanistic test. Reactive's accuracy did not significantly
-beat upfront B$'$+E and remained below B$'$. The condition is
-Pareto-improved on cost and substantially improves the diagnostic
-markers, but a production decision depends on cost-latency tradeoffs,
-field-level validation of the focused extractor, and the specific
-clinical workflow. Treating reactive as a recommended deployment
-configuration would overstate what one comparison can show.
+beat upfront B$'$+E and remained below B$'$. The condition is cheaper
+in tokens (and improves the diagnostic markers) but \emph{not} faster
+in median wall-clock latency. A production decision depends on
+cost-latency tradeoffs, field-level validation of the focused
+extractor, and the specific clinical workflow. Treating reactive as
+a recommended deployment configuration would overstate what one
+comparison can show.

@@ -92,9 +92,14 @@ model.
 
 \textbf{D} (post-hoc Sonnet verifier) keeps Qwen3 as the primary, but
 after the final answer is produced, sends (case, candidate answer) to a
-Sonnet verifier that may request one revision pass. D is an
-output-surface comparator, the closest analog to ``check the final
-answer'' approaches.
+Sonnet verifier (system prompt in \cref{lst:prompt_d}). The verifier
+returns a structured JSON object \verb|{consistent: bool, issue: str}|;
+if \texttt{consistent=false}, the natural-language \texttt{issue}
+sentence is injected verbatim into a templated revision prompt
+(``A reviewer flagged your previous answer: \emph{<issue>}. Please
+reconsider the case and provide a corrected JSON answer.''), and the
+primary is re-run exactly once. D is an output-surface comparator, the
+closest analog to ``check the final answer'' approaches.
 
 \textbf{E} (interwhen-style deterministic input verifier) is the primary
 object of study. At each \verb|<tool_call>| Qwen3 emits, the verifier
@@ -121,18 +126,13 @@ code paths.
 \subsubsection{Diagnostic: Reactive Fact Extraction}
 \label{sec:methods_reactive}
 
-\textbf{B$'$+E (reactive)} keeps the B$'$ system prompt and the
-verifier's comparison logic, model, and benchmark fixed. The only
-architectural change is the extractor's regime. Instead of one upfront
-Sonnet call over the full schema, the adapter performs one focused
-Sonnet call per \toolname{medical\_calculator\_output} tool call. At each
-such call, the adapter parses the requested field names from
-\verb|input_data|, renders a focused Sonnet prompt covering only those
-fields (typically 3--30, not 500), and runs extraction blind to the
-model's predicted values. The verifier then compares as before.
-This condition tests whether the extractor's full-schema architecture
-specifically is the limiting factor, with every other variable held
-constant.
+\textbf{B$'$+E (reactive)} keeps the B$'$ system prompt, the
+verifier's comparison logic, the primary model, and the benchmark
+fixed. The only change is the extractor's regime: per-tool-call
+focused extraction instead of one upfront full-schema call
+(implementation in \cref{sec:methods_extractor_reactive}). This
+condition isolates the extractor architecture as a single variable,
+testing whether the full-schema design is the limiting factor.
 
 \begin{table}[!htbp]
   \centering

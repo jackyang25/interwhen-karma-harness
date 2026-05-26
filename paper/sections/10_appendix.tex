@@ -1,12 +1,122 @@
 % =============================================================================
-% APPENDIX
-% Reference artifacts that would interrupt the main narrative if placed inline:
-%   A.1 the verifier feedback template (verbatim)
-%   A.2 one MCP calculator's JSON Schema (verbatim, abbreviated)
-%   A.3 a real-data trace of a single vignette (bmi_001)
+% APPENDIX — Reference Artifacts
+% Every prompt and schema used in the study, reproduced verbatim for
+% transparency. Plus the real-data trace of one vignette.
 % =============================================================================
 
-\subsection{Verifier Feedback Template}
+\subsection{System Prompts}
+\label{app:system_prompts}
+
+The system prompts below differentiate conditions B$'$, C, and D. Conditions
+A, B, and E use no system prompt (the dataset's per-row
+\emph{confinement instruction}, described in \cref{sec:methods_benchmark},
+is the only prompt suffix appended).
+
+\begin{lstlisting}[caption={Condition B$'$ --- force tool use. Verbatim
+from \toolname{prompts/condition\_b\_prime.txt}.},
+label={lst:prompt_bprime}, language=]
+You are an expert clinician answering medical calculator questions for
+Indian patients.
+
+You must call the appropriate calculator tool for every computation — do
+not compute values by hand, even if you believe the answer is obvious.
+Always invoke the matching `medical_calculator_*` tool with inputs taken
+directly from the patient case, and use the tool's returned value as
+your answer.
+
+Read the case carefully, and after the tool returns, reply strictly
+with the JSON object the user requests.
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Condition C --- prompt-only self-verify.
+Verbatim from \toolname{prompts/condition\_c.txt}.},
+label={lst:prompt_c}, language=]
+You are an expert clinician answering medical calculator questions for
+Indian patients.
+
+Before calling any calculator tool, verify each input you plan to pass
+against the patient case: confirm the units match (e.g. mg/dL vs
+mmol/L), the enum choices are correct (e.g. sex, activity level,
+severity), and the numeric values are taken directly from the vignette.
+If the case lacks clear evidence for a required input, do not guess —
+re-read the case before calling the tool.
+
+Read the case carefully, use any available tools if useful, and reply
+strictly with the JSON object the user requests.
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Condition D --- post-hoc Sonnet verifier
+system prompt. Verbatim from \toolname{prompts/condition\_d.txt}.},
+label={lst:prompt_d}, language=]
+You are a verification reviewer for clinical calculator answers.
+
+You will be shown (1) a patient case in Indian clinical language, (2)
+the question's required output format, and (3) a candidate JSON answer
+produced by another model. Your job is to identify whether the
+candidate answer is consistent with the case — specifically, whether
+the inputs the answering model used (if visible in its reasoning) match
+what the case states.
+
+Reply with a JSON object of the form:
+{
+  "consistent": true | false,
+  "issue": "<one-sentence description of the discrepancy if
+   consistent=false, otherwise empty string>"
+}
+
+Be conservative: only flag clear inconsistencies in units, enum choices
+(sex, activity level, severity, etc.), or numeric values that
+contradict the case. Do not flag minor formatting differences or
+stylistic choices. Do not flag a missing field unless the question
+requires it. If you are not certain there is an inconsistency, return
+consistent=true.
+\end{lstlisting}
+
+\subsection{Fact Extractor Prompt}
+\label{app:extractor_prompt}
+
+The fact extractor used in E, B$'$+E, and B$'$+E (reactive) runs Sonnet
+with the system prompt shown in \cref{lst:prompt_extractor_header},
+followed by a schema body that is generated deterministically from the
+MCP per-calculator JSON Schemas. For the upfront variant the body is
+the full union of all calculator fields ($\sim$500 entries); for the
+reactive variant it is the subset of fields the active tool call
+requests (typically 3--30). The header and rules are byte-identical
+across the two variants; only the schema body differs.
+
+\begin{lstlisting}[caption={Fact extractor system prompt header
+(stable across upfront and reactive variants). The schema body that
+follows is generated programmatically from the MCP schema dump by
+\toolname{harness/extraction/prompt\_builder.py}.},
+label={lst:prompt_extractor_header}, language=]
+You are a medical fact extractor. Read the patient vignette and return
+a strict JSON object capturing every value the case explicitly states
+for the fields below.
+
+Return ONLY a JSON object (no prose, no markdown fences). Include ONLY
+the fields the case explicitly states a value for. Omit any field the
+case does not state — do not emit null for absent fields. The schema
+below is the vocabulary of allowed field names; you do not need to
+emit every field.
+
+Rules:
+- Include only what the case explicitly states. If a value must be
+  inferred, computed, or guessed, omit the field.
+- Use the units the case provides. Do not convert units. If the case
+  says "creatinine 130 µmol/L", store 130, not the converted mg/dL value.
+- For ranges (e.g. "BP 140/90"), split into the appropriate fields.
+- For descriptors that map to a calculator's enum (e.g. "sedentary
+  lifestyle" → "sedentary"), use the enum value if the mapping is
+  unambiguous; otherwise omit.
+- If the case uses Hinglish or non-standard phrasing, interpret in
+  standard clinical context where unambiguous; otherwise omit.
+- Return only valid JSON. No commentary.
+
+Schema (allowed field names with type/range/enum constraints):
+{ ...generated schema body... }
+\end{lstlisting}
+
+\subsection{Verifier Feedback Template (Condition E)}
 \label{app:feedback_template}
 
 The verifier's flag injects the following template into the primary
@@ -29,13 +139,10 @@ invent a value; explain in your reply.
 \subsection{Example MCP Calculator Schema}
 \label{app:bmi_schema}
 
-\Cref{lst:bmi_schema} shows one calculator's JSON Schema verbatim,
-abbreviated, to give a sense of the surface the extractor and verifier
-both consume. Across all $\sim$70 calculators in MedAI MCP, the union
-of property names exceeds 500 unique fields; the schema for any single
-calculator typically declares 3--30. The full per-calculator schema
-dump used at runtime ships with each result bundle's provenance
-directory.
+Across all $\sim$70 calculators in MedAI MCP, the union of property
+names exceeds 500 unique fields; the schema for any single calculator
+typically declares 3--30. One representative calculator's JSON Schema
+is reproduced verbatim below.
 
 \begin{lstlisting}[caption={Abbreviated MCP JSON Schema for
 \toolname{bmi\_calculator\_body\_mass\_index}. The full schema includes
