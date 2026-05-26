@@ -8,8 +8,8 @@ primary model. The verifier compares each (field, value) pair the model
 proposes to dispatch to an MCP medical calculator against a reference set
 of facts extracted from the case by Sonnet 4.6.
 Across four pre-registered primary contrasts (Bonferroni $\alpha=0.0125$),
-no verifier configuration significantly improved over the no-verifier
-baseline. In exploratory analyses, combining a tool-forcing system prompt
+no verifier configuration \emph{with an LLM-extracted reference}
+significantly improved over the no-verifier baseline. In exploratory analyses, combining a tool-forcing system prompt
 with the verifier (B$'$+E) actively reduced accuracy by 9.0 percentage
 points (McNemar $p < 10^{-15}$, 118 correct$\rightarrow$wrong vs 22
 wrong$\rightarrow$correct). A flag-composition diagnostic traced this
