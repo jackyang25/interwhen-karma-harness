@@ -12,5 +12,13 @@ field-level accuracy as the gate; that check is a manual step, not enforced
 in code.
 """
 from harness.extraction.extractor import FactExtractor, PatientFacts
+from harness.extraction.citations import validate_substring, coerce_citations_to_bare
+from harness.extraction.voting import majority_vote
 
-__all__ = ["FactExtractor", "PatientFacts"]
+__all__ = [
+    "FactExtractor",
+    "PatientFacts",
+    "validate_substring",
+    "coerce_citations_to_bare",
+    "majority_vote",
+]

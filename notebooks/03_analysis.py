@@ -1,21 +1,38 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 03 — Cross-condition analysis
+# MAGIC # 03 — Cross-condition analysis (9-condition pre-registered design)
 # MAGIC
-# MAGIC Loads the per-row parquets from each condition (A, B, C, D, E, B') and
-# MAGIC runs the §7 statistical plan:
+# MAGIC Loads per-row parquets from each condition and runs the pre-registered
+# MAGIC statistical plan against the **6-contrast Bonferroni family**
+# MAGIC (α = 0.05 / 6 = 0.00833).
 # MAGIC
-# MAGIC **Primary (Bonferroni family, α = 0.05 / 4 = 0.0125):**
-# MAGIC - B vs A — Did tools help?
-# MAGIC - E vs B — Did verification beat tool access alone? (foundational)
-# MAGIC - E vs C — Did verification beat best-effort prompt?
-# MAGIC - E vs D — Did mid-stream beat post-hoc verifier?
+# MAGIC ## Condition table
 # MAGIC
-# MAGIC **Secondary (exploratory, uncorrected α = 0.05):**
-# MAGIC - B' vs B — Did forced tool use close the underuse gap?
+# MAGIC | # | ID | Group | Description |
+# MAGIC |---|----|-------|-------------|
+# MAGIC | 1 | A | anchor | No tools — capability floor |
+# MAGIC | 2 | B | anchor | Tools + no system prompt — apparatus baseline |
+# MAGIC | 3 | B_prime | anchor | Tools + force-tool-use prompt |
+# MAGIC | 4 | B_prime_E | primary | Upfront full-schema extractor + hygiene |
+# MAGIC | 5 | B_prime_E_reactive | primary | Reactive per-call extractor + hygiene |
+# MAGIC | 6 | B_prime_E_reactive_citations | primary | Reactive + (value, source_span) |
+# MAGIC | 7 | B_prime_E_reactive_kshot | primary | Reactive + k=3 majority vote |
+# MAGIC | 8 | C | exploratory | Prompt-only self-verify (inherited) |
+# MAGIC | 9 | D | exploratory | Post-hoc Sonnet verifier (inherited) |
 # MAGIC
-# MAGIC Plus: cost/accuracy Pareto plot, per-category breakdowns, verifier
-# MAGIC characterization for E, stratified analysis on the tool-using subset.
+# MAGIC ## Pre-registered primary contrasts (Bonferroni n=6, α=0.00833)
+# MAGIC
+# MAGIC | # | Comparison | Question |
+# MAGIC |---|------------|----------|
+# MAGIC | 1 | B vs A | Does tool access help? |
+# MAGIC | 2 | B_prime vs B | Does forced tool use help (no verifier)? |
+# MAGIC | 3 | B_prime_E vs B_prime | Does upfront verifier-guided extraction help? |
+# MAGIC | 4 | B_prime_E_reactive vs B_prime | Does reactive verifier-guided extraction help? |
+# MAGIC | 5 | B_prime_E_reactive_citations vs B_prime_E_reactive | Does citation grounding improve reactive? |
+# MAGIC | 6 | B_prime_E_reactive_kshot vs B_prime_E_reactive | Does k-shot voting improve reactive? |
+# MAGIC
+# MAGIC Plus exploratory contrasts: B_prime_E (upfront) vs B_prime_E_reactive
+# MAGIC (placement); C vs B, D vs B (other verifier mechanisms).
 
 # COMMAND ----------
 
@@ -31,359 +48,466 @@ from harness.analysis import wilson_ci, mcnemar, bonferroni
 
 # COMMAND ----------
 
-# MAGIC %md ## 1. Load all condition results
+# MAGIC %md ## 1. Canonical condition table
 
 # COMMAND ----------
 
-# DBTITLE 1,Load all condition results
-RESULTS_DIR = Path("/dbfs/results")
-
-CONDITIONS = {
-    "A":         "qwen3_condition_A_full",
-    "B":         "qwen3_condition_B_full",
-    "C":         "qwen3_condition_C_full",
-    "D":         "qwen3_condition_D_full",
-    "E":         "qwen3_condition_E_full",
-    "B_prime":   "qwen3_condition_B_prime_full",
-    # Exploratory (post-hoc, like B'). Tests whether interwhen helps once
-    # the tool-use ceiling is removed. Kept out of the pre-registered
-    # Bonferroni family; compared in a separate exploratory block below.
-    "B_prime_E":          "qwen3_condition_B_prime_E_full",
-    # Exploratory follow-up: same as B_prime_E but with reactive per-tool-call
-    # focused fact extraction instead of upfront 500-field extraction. Tests
-    # whether extractor schema size was the bottleneck in B_prime_E's harm.
-    "B_prime_E_reactive": "qwen3_condition_B_prime_E_reactive_full",
+# DBTITLE 1,Canonical 9-condition table (mirror of 02_run_all)
+# This dict is the analysis-side mirror of ALL_CONDITIONS in 02_run_all.py.
+# Keys must match exactly so per-vignette parquets line up by condition_id.
+ALL_CONDITIONS: dict[str, dict] = {
+    "A":                              {"group": "anchor",      "label": "A"},
+    "B":                              {"group": "anchor",      "label": "B"},
+    "B_prime":                        {"group": "anchor",      "label": "B'"},
+    "B_prime_E":                      {"group": "primary",     "label": "B'+E (upfront)"},
+    "B_prime_E_reactive":             {"group": "primary",     "label": "B'+E (reactive)"},
+    "B_prime_E_reactive_citations":   {"group": "primary",     "label": "B'+E (reactive + citations)"},
+    "B_prime_E_reactive_kshot":       {"group": "primary",     "label": "B'+E (reactive + k-shot)"},
+    "C":                              {"group": "exploratory", "label": "C"},
+    "D":                              {"group": "exploratory", "label": "D"},
 }
 
-# One-time migration: rename legacy D_prime dirs to D
+PRIMARY_CONDITIONS = [k for k, v in ALL_CONDITIONS.items() if v["group"] == "primary"]
+ANCHOR_CONDITIONS  = [k for k, v in ALL_CONDITIONS.items() if v["group"] == "anchor"]
+EXPLORATORY_CONDITIONS = [k for k, v in ALL_CONDITIONS.items() if v["group"] == "exploratory"]
+
+# Ordered for the headline forest plot (anchors → primary → exploratory).
+PLOT_ORDER = ANCHOR_CONDITIONS + PRIMARY_CONDITIONS + EXPLORATORY_CONDITIONS
+
+# COMMAND ----------
+
+# MAGIC %md ## 2. Load all condition results (uniform)
+
+# COMMAND ----------
+
+# DBTITLE 1,Load per-condition parquets
+RESULTS_DIR = Path("/dbfs/results")
+
+
+def _result_path(cond: str) -> Path:
+    return RESULTS_DIR / f"qwen3_condition_{cond}_full" / "rows.parquet"
+
+
+# One-time migration: rename legacy D_prime dirs to D.
 for _old, _new in [
     ("qwen3_condition_D_prime_full",  "qwen3_condition_D_full"),
     ("qwen3_condition_D_prime_pilot", "qwen3_condition_D_pilot"),
 ]:
     if (RESULTS_DIR / _old).exists() and not (RESULTS_DIR / _new).exists():
         (RESULTS_DIR / _old).rename(RESULTS_DIR / _new)
-        print(f"Migrated {_old} \u2192 {_new}")
+        print(f"Migrated {_old} → {_new}")
 
 dfs: dict[str, pd.DataFrame] = {}
-for cond, path in CONDITIONS.items():
-    full_path = RESULTS_DIR / path / "rows.parquet"
-    if full_path.exists():
-        dfs[cond] = pd.read_parquet(full_path)
-        print(f"{cond}: loaded {len(dfs[cond])} rows from {full_path}")
+for cond in ALL_CONDITIONS:
+    p = _result_path(cond)
+    if p.exists():
+        dfs[cond] = pd.read_parquet(p)
+        print(f"{cond}: loaded {len(dfs[cond])} rows from {p}")
     else:
-        print(f"{cond}: missing parquet at {full_path}")
+        print(f"{cond}: MISSING parquet at {p}")
+
+print(f"\nLoaded {len(dfs)}/{len(ALL_CONDITIONS)} conditions.")
+_missing = [c for c in ALL_CONDITIONS if c not in dfs]
+if _missing:
+    print(f"Missing: {_missing}")
+    print("(Analysis below proceeds with what's available; contrasts that need")
+    print("missing conditions will be skipped and logged.)")
 
 # COMMAND ----------
 
-# MAGIC %md ## 2. Per-condition accuracy table (Wilson CIs)
+# MAGIC %md ## 3. Per-condition accuracy table (Wilson 95% CIs)
 
 # COMMAND ----------
 
+# DBTITLE 1,Accuracy table — all 9 conditions symmetric
 rows = []
-for cond, df in dfs.items():
+for cond in PLOT_ORDER:
+    if cond not in dfs:
+        rows.append({
+            "condition": cond, "label": ALL_CONDITIONS[cond]["label"],
+            "group": ALL_CONDITIONS[cond]["group"],
+            "n": None, "n_correct": None, "accuracy": None,
+            "ci_low": None, "ci_high": None,
+            "parse_failures": None, "mean_tool_calls": None,
+            "status": "missing",
+        })
+        continue
+    df = dfs[cond]
     ci = wilson_ci(int(df["correct"].sum()), len(df))
-    rows.append(
-        {
-            "condition": cond,
-            "n": ci.n,
-            "n_correct": int(df["correct"].sum()),
-            "accuracy": ci.accuracy,
-            "ci_low": ci.lo,
-            "ci_high": ci.hi,
-            "parse_failures": int(df["parse_failed"].sum()),
-            "mean_tool_calls": df["n_tool_calls"].mean(),
-        }
-    )
+    rows.append({
+        "condition":       cond,
+        "label":           ALL_CONDITIONS[cond]["label"],
+        "group":           ALL_CONDITIONS[cond]["group"],
+        "n":               ci.n,
+        "n_correct":       int(df["correct"].sum()),
+        "accuracy":        ci.accuracy,
+        "ci_low":          ci.lo,
+        "ci_high":         ci.hi,
+        "parse_failures":  int(df["parse_failed"].sum()) if "parse_failed" in df.columns else None,
+        "mean_tool_calls": df["n_tool_calls"].mean() if "n_tool_calls" in df.columns else None,
+        "status":          "ok",
+    })
 accuracy_table = pd.DataFrame(rows)
 display(accuracy_table)  # noqa: F821
 
 # COMMAND ----------
 
-# MAGIC %md ## 3. Primary comparisons (McNemar paired + Bonferroni)
-# MAGIC
-# MAGIC McNemar's test requires the same questions in both arms (paired by `id`).
+# MAGIC %md ## 4. Pre-registered McNemar contrasts (Bonferroni n=6, α=0.00833)
 
 # COMMAND ----------
 
+# DBTITLE 1,Paired correctness helper
 def paired_correctness(df_a: pd.DataFrame, df_b: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Align two condition DataFrames on `id` and return paired correctness arrays."""
     merged = df_a[["id", "correct"]].rename(columns={"correct": "a"}).merge(
         df_b[["id", "correct"]].rename(columns={"correct": "b"}),
-        on="id",
-        how="inner",
+        on="id", how="inner",
     )
     return merged["a"].to_numpy(), merged["b"].to_numpy()
 
 
-primary_results: dict[str, dict] = {}
-
-for label, (left, right) in {
-    "B_vs_A": ("B", "A"),
-    "E_vs_B": ("E", "B"),
-    "E_vs_C": ("E", "C"),
-    "E_vs_D": ("E", "D"),
-}.items():
+def run_contrast(label: str, left: str, right: str) -> dict:
     if left not in dfs or right not in dfs:
-        primary_results[label] = {"status": "missing condition data"}
-        continue
+        return {"label": label, "left": left, "right": right, "status": "missing"}
     x, y = paired_correctness(dfs[left], dfs[right])
     res = mcnemar(x, y)
-    primary_results[label] = {
-        "b_x_correct_y_wrong": res.b,
-        "c_x_wrong_y_correct": res.c,
-        "uncorrected_p": res.pvalue,
-        "n_paired": len(x),
-        "accuracy_left": float(x.mean()),
-        "accuracy_right": float(y.mean()),
-        "delta_pp": float((x.mean() - y.mean()) * 100),
+    return {
+        "label":              label,
+        "left":               left,
+        "right":              right,
+        "n_paired":           int(len(x)),
+        "accuracy_left":      float(x.mean()),
+        "accuracy_right":     float(y.mean()),
+        "delta_pp":           float((x.mean() - y.mean()) * 100),
+        "mcnemar_b":          int(res.b),
+        "mcnemar_c":          int(res.c),
+        "p_uncorrected":      float(res.pvalue),
+        "status":             "ok",
     }
 
-# Bonferroni on the family of 4 confirmatory comparisons.
+# COMMAND ----------
+
+# DBTITLE 1,Primary contrasts — 6 pre-registered, Bonferroni α=0.00833
+PRIMARY_CONTRASTS = [
+    ("B_vs_A",                                              "B",                            "A"),
+    ("B_prime_vs_B",                                        "B_prime",                      "B"),
+    ("B_prime_E_vs_B_prime",                                "B_prime_E",                    "B_prime"),
+    ("B_prime_E_reactive_vs_B_prime",                       "B_prime_E_reactive",           "B_prime"),
+    ("B_prime_E_reactive_citations_vs_B_prime_E_reactive",  "B_prime_E_reactive_citations", "B_prime_E_reactive"),
+    ("B_prime_E_reactive_kshot_vs_B_prime_E_reactive",      "B_prime_E_reactive_kshot",     "B_prime_E_reactive"),
+]
+BONFERRONI_N = len(PRIMARY_CONTRASTS)  # 6 → per-test α = 0.05 / 6 = 0.00833
+
+primary_results: dict[str, dict] = {}
+for label, left, right in PRIMARY_CONTRASTS:
+    primary_results[label] = run_contrast(label, left, right)
+
+# Bonferroni correction over the family of 6 confirmatory comparisons.
 uncorrected_pvals = {
-    k: v["uncorrected_p"]
+    k: v["p_uncorrected"]
     for k, v in primary_results.items()
-    if "uncorrected_p" in v
+    if v.get("status") == "ok"
 }
-adjusted = bonferroni(uncorrected_pvals, n_tests=4)
+adjusted = bonferroni(uncorrected_pvals, n_tests=BONFERRONI_N)
+PRIMARY_ALPHA = 0.05 / BONFERRONI_N
+
 for k, p_adj in adjusted.items():
-    primary_results[k]["bonferroni_p"] = p_adj
-    primary_results[k]["significant_at_0.05"] = p_adj < 0.05
+    primary_results[k]["p_bonferroni"]                    = p_adj
+    primary_results[k]["significant_at_family_0.05"]      = p_adj < 0.05
+    primary_results[k]["significant_at_per_test_alpha"]   = primary_results[k]["p_uncorrected"] < PRIMARY_ALPHA
 
 primary_df = pd.DataFrame(primary_results).T
 display(primary_df)  # noqa: F821
+print(f"\nFamily α = 0.05; n_tests = {BONFERRONI_N}; per-test α = {PRIMARY_ALPHA:.5f}")
 
 # COMMAND ----------
 
-# MAGIC %md ## 4. Secondary comparison (B' vs B, exploratory)
-
-# COMMAND ----------
-
-if "B_prime" in dfs and "B" in dfs:
-    x, y = paired_correctness(dfs["B_prime"], dfs["B"])
-    res = mcnemar(x, y)
-    print(f"B' vs B (exploratory, uncorrected α = 0.05):")
-    print(f"  n paired: {len(x)}")
-    print(f"  B' accuracy: {x.mean():.3f}")
-    print(f"  B  accuracy: {y.mean():.3f}")
-    print(f"  Delta:       {(x.mean() - y.mean()) * 100:+.2f} pp")
-    print(f"  McNemar:     b={res.b}, c={res.c}, p={res.pvalue:.4g}")
-    print(f"  Significant at α=0.05 (uncorrected): {res.pvalue < 0.05}")
-else:
-    print("B' or B missing — cannot compute secondary comparison")
-
-# COMMAND ----------
-
-# MAGIC %md ## 4b. Exploratory comparisons (B_prime_E, post-hoc)
+# MAGIC %md ## 5. Exploratory contrasts (uncorrected)
 # MAGIC
-# MAGIC B_prime_E is a second post-hoc condition (interwhen verifier on top of
-# MAGIC forced tool use). Reported as exploratory — NOT included in the
-# MAGIC pre-registered Bonferroni family. Headline: B_prime_E vs B_prime
-# MAGIC ("does interwhen help once the tool-use ceiling is removed?").
+# MAGIC - **Placement** (upfront vs reactive): a within-architecture contrast
+# MAGIC   isolating the effect of extraction placement at fixed format and sampling.
+# MAGIC - **Other verifier mechanisms (C, D)**: tested against B as historical
+# MAGIC   comparators — they are not in the primary family.
 
 # COMMAND ----------
+
+# DBTITLE 1,Exploratory contrasts
+EXPLORATORY_CONTRASTS = [
+    ("B_prime_E_upfront_vs_reactive", "B_prime_E", "B_prime_E_reactive"),
+    ("C_vs_B",                        "C",         "B"),
+    ("D_vs_B",                        "D",         "B"),
+]
 
 exploratory_results: dict[str, dict] = {}
-
-for label, (left, right) in {
-    "B_prime_E_vs_B_prime":                 ("B_prime_E", "B_prime"),  # headline: does interwhen add value once tools are forced?
-    "B_prime_E_vs_E":                       ("B_prime_E", "E"),         # secondary: does forcing tools rescue interwhen?
-    # Reactive-extraction follow-up comparisons (post-hoc):
-    "B_prime_E_reactive_vs_B_prime_E":      ("B_prime_E_reactive", "B_prime_E"),  # does reactive extraction fix the B_prime_E harm?
-    "B_prime_E_reactive_vs_B_prime":        ("B_prime_E_reactive", "B_prime"),    # does the verifier-with-reactive-extraction help vs no verifier?
-}.items():
-    if left not in dfs or right not in dfs:
-        exploratory_results[label] = {"status": f"missing condition data ({left} or {right} not loaded)"}
-        print(f"{label}: missing condition data ({left} or {right} not loaded)")
-        continue
-    x, y = paired_correctness(dfs[left], dfs[right])
-    _res = mcnemar(x, y)
-    exploratory_results[label] = {
-        "n_paired":                       int(len(x)),
-        "accuracy_left":                  float(x.mean()),
-        "accuracy_right":                 float(y.mean()),
-        "delta_pp":                       float((x.mean() - y.mean()) * 100),
-        "mcnemar_b":                      int(_res.b),
-        "mcnemar_c":                      int(_res.c),
-        "p_uncorrected":                  float(_res.pvalue),
-        "significant_at_0.05_uncorrected": bool(_res.pvalue < 0.05),
-    }
+for label, left, right in EXPLORATORY_CONTRASTS:
+    exploratory_results[label] = run_contrast(label, left, right)
     r = exploratory_results[label]
+    if r.get("status") != "ok":
+        print(f"{label}: missing condition data ({r['left']} or {r['right']} not loaded)")
+        continue
     print(f"{label} (exploratory, uncorrected α = 0.05):")
-    print(f"  n paired:  {r['n_paired']}")
-    print(f"  {left} accuracy:  {r['accuracy_left']:.3f}")
-    print(f"  {right} accuracy: {r['accuracy_right']:.3f}")
-    print(f"  Delta:     {r['delta_pp']:+.2f} pp")
-    print(f"  McNemar:   b={r['mcnemar_b']}, c={r['mcnemar_c']}, p={r['p_uncorrected']:.4g}")
-    print(f"  Significant at α=0.05 (uncorrected): {r['significant_at_0.05_uncorrected']}")
+    print(f"  n paired:        {r['n_paired']}")
+    print(f"  {r['left']:<35s} accuracy: {r['accuracy_left']:.3f}")
+    print(f"  {r['right']:<35s} accuracy: {r['accuracy_right']:.3f}")
+    print(f"  Delta:           {r['delta_pp']:+.2f} pp")
+    print(f"  McNemar:         b={r['mcnemar_b']}, c={r['mcnemar_c']}, p={r['p_uncorrected']:.4g}")
 
 # COMMAND ----------
 
-# MAGIC %md ## 5. Stratified analysis — effect on the tool-using subset
+# MAGIC %md ## 6. Axis-effect view — placement, output format, sampling
 # MAGIC
-# MAGIC The primary input-verification interventions (C, D, E) can only act on
-# MAGIC rows where the baseline (B) used at least one tool. Reporting verifier
-# MAGIC effect on this subset is the honest reading of the hypothesis.
+# MAGIC Each row isolates ONE architectural axis (with other axes held fixed).
+# MAGIC This is the cleanest reading of "which axis matters" for the paper.
 
 # COMMAND ----------
 
+# DBTITLE 1,Architectural axis-effect table
+AXIS_CONTRASTS = [
+    ("placement",     "upfront vs reactive (bare, k=1)",        "B_prime_E",                    "B_prime_E_reactive"),
+    ("output_format", "bare vs citation (reactive, k=1)",       "B_prime_E_reactive",           "B_prime_E_reactive_citations"),
+    ("sampling",      "k=1 vs k=3 voting (reactive, bare)",     "B_prime_E_reactive",           "B_prime_E_reactive_kshot"),
+]
+
+axis_rows = []
+for axis, desc, left, right in AXIS_CONTRASTS:
+    r = run_contrast(f"axis_{axis}", left, right)
+    if r.get("status") != "ok":
+        axis_rows.append({"axis": axis, "description": desc, "status": "missing"})
+        continue
+    axis_rows.append({
+        "axis":           axis,
+        "description":    desc,
+        "left":           left,
+        "right":          right,
+        "accuracy_left":  r["accuracy_left"],
+        "accuracy_right": r["accuracy_right"],
+        "delta_pp":       r["delta_pp"],
+        "mcnemar_b":      r["mcnemar_b"],
+        "mcnemar_c":      r["mcnemar_c"],
+        "p_uncorrected":  r["p_uncorrected"],
+    })
+axis_df = pd.DataFrame(axis_rows)
+display(axis_df)  # noqa: F821
+
+# COMMAND ----------
+
+# MAGIC %md ## 7. Stratified analysis — effect on the tool-using subset
+
+# COMMAND ----------
+
+# DBTITLE 1,Stratified subset where B used tools
 if "B" in dfs:
     b_tool_using_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
     print(f"Tool-using subset (B): {len(b_tool_using_ids)} / {len(dfs['B'])} rows")
 
     sub_rows = []
-    for cond in ["A", "B", "C", "D", "E", "B_prime_E", "B_prime_E_reactive"]:
+    for cond in PLOT_ORDER:
         if cond not in dfs:
             continue
         sub = dfs[cond][dfs[cond]["id"].isin(b_tool_using_ids)]
+        if len(sub) == 0:
+            continue
         ci = wilson_ci(int(sub["correct"].sum()), len(sub))
-        sub_rows.append(
-            {
-                "condition": cond,
-                "n_subset": ci.n,
-                "accuracy_on_subset": ci.accuracy,
-                "ci_low": ci.lo,
-                "ci_high": ci.hi,
-            }
-        )
-    display(pd.DataFrame(sub_rows))  # noqa: F821
+        sub_rows.append({
+            "condition":         cond,
+            "label":             ALL_CONDITIONS[cond]["label"],
+            "group":             ALL_CONDITIONS[cond]["group"],
+            "n_subset":          ci.n,
+            "accuracy_on_subset": ci.accuracy,
+            "ci_low":            ci.lo,
+            "ci_high":           ci.hi,
+        })
+    stratified_df = pd.DataFrame(sub_rows)
+    display(stratified_df)  # noqa: F821
+else:
+    stratified_df = pd.DataFrame()
+    print("B missing — cannot compute stratified subset.")
 
 # COMMAND ----------
 
-# MAGIC %md ## 6. Cost / latency Pareto (LMIC deployment view)
+# MAGIC %md ## 8. Cost and latency (per condition)
 
 # COMMAND ----------
 
+# DBTITLE 1,Cost/latency table (symmetric across 9 conditions)
 def _col_or_zero(df: pd.DataFrame, col: str) -> pd.Series:
-    """Return df[col] if present, else a zero-filled Series of the same length.
-    Lets us derive api_/on_gpu_ aggregates uniformly across legacy (no breakout
-    columns) and new (extractor_/qwen3_/primary_/verifier_) schemas."""
+    """Return df[col] if present, else a zero-filled Series. Lets us derive
+    api_/on_gpu_ aggregates uniformly across schemas with or without the
+    extractor/verifier breakout columns."""
     if col in df.columns:
         return df[col]
     return pd.Series([0] * len(df), index=df.index)
 
 
 cost_rows = []
-for cond, df in dfs.items():
-    if "elapsed_seconds" not in df.columns:
-        cost_rows.append({"condition": cond, "note": "instrumentation missing (legacy parquet)"})
+for cond in PLOT_ORDER:
+    if cond not in dfs:
+        cost_rows.append({"condition": cond, "label": ALL_CONDITIONS[cond]["label"], "status": "missing"})
         continue
-    # API-side (Anthropic billing): extractor (E, B_prime_E) + verifier (D).
-    # Both go to 0 for A/B/C/B' where neither column exists.
+    df = dfs[cond]
+    if "elapsed_seconds" not in df.columns:
+        cost_rows.append({"condition": cond, "label": ALL_CONDITIONS[cond]["label"], "status": "legacy parquet (no instrumentation)"})
+        continue
+
+    # API-side (Anthropic billing): extractor (any B'+E variant) + verifier (D).
     api_prompt     = _col_or_zero(df, "extractor_prompt_tokens")     + _col_or_zero(df, "verifier_prompt_tokens")
     api_completion = _col_or_zero(df, "extractor_completion_tokens") + _col_or_zero(df, "verifier_completion_tokens")
     api_elapsed    = _col_or_zero(df, "extractor_elapsed_s")         + _col_or_zero(df, "verifier_elapsed_s")
-    # On-GPU (vLLM): everything in `prompt_tokens` / `completion_tokens` that
-    # wasn't API-side. Works for both legacy schemas (api_*=0 → on_gpu_*=total)
-    # and new schemas where breakouts add up to the total.
+    # On-GPU (vLLM): everything in `prompt_tokens` / `completion_tokens` not
+    # accounted for by API-side.
     on_gpu_prompt     = _col_or_zero(df, "prompt_tokens")     - api_prompt
     on_gpu_completion = _col_or_zero(df, "completion_tokens") - api_completion
 
-    cost_rows.append(
-        {
-            "condition": cond,
-            "accuracy": df["correct"].mean(),
-            "mean_total_tokens": df["total_tokens"].mean() if "total_tokens" in df.columns else None,
-            "median_latency_s": df["elapsed_seconds"].median(),
-            "mean_model_calls": df["n_model_calls"].mean() if "n_model_calls" in df.columns else None,
-            # Deployment-honest cost split: what's billed by Anthropic vs what
-            # ran on the local GPU. Zero for A/B/C/B' (pure Qwen3), populated
-            # for D (verifier), E and B_prime_E (extractor).
-            "mean_api_prompt_tokens":      float(api_prompt.mean()),
-            "mean_api_completion_tokens":  float(api_completion.mean()),
-            "mean_api_elapsed_s":          float(api_elapsed.mean()),
-            "mean_on_gpu_prompt_tokens":     float(on_gpu_prompt.mean()),
-            "mean_on_gpu_completion_tokens": float(on_gpu_completion.mean()),
-        }
-    )
+    cost_rows.append({
+        "condition":                     cond,
+        "label":                         ALL_CONDITIONS[cond]["label"],
+        "group":                         ALL_CONDITIONS[cond]["group"],
+        "accuracy":                      df["correct"].mean(),
+        "mean_total_tokens":             df["total_tokens"].mean() if "total_tokens" in df.columns else None,
+        "median_latency_s":              df["elapsed_seconds"].median(),
+        "mean_model_calls":              df["n_model_calls"].mean() if "n_model_calls" in df.columns else None,
+        "mean_api_prompt_tokens":        float(api_prompt.mean()),
+        "mean_api_completion_tokens":    float(api_completion.mean()),
+        "mean_api_elapsed_s":            float(api_elapsed.mean()),
+        "mean_on_gpu_prompt_tokens":     float(on_gpu_prompt.mean()),
+        "mean_on_gpu_completion_tokens": float(on_gpu_completion.mean()),
+    })
 cost_df = pd.DataFrame(cost_rows)
 display(cost_df)  # noqa: F821
 
 # COMMAND ----------
 
-# MAGIC %md ## 6.1 Pareto plot
+# MAGIC %md ## 9. Figures
 # MAGIC
-# MAGIC Accuracy vs cost-proxy (total tokens). Conditions in the upper-left are
-# MAGIC the deployment sweet spots.
+# MAGIC Symmetric per-condition treatment. Each figure works for any subset
+# MAGIC of `dfs` that loaded successfully.
 
 # COMMAND ----------
 
-# DBTITLE 1,Pareto plot (accuracy vs total tokens)
+# DBTITLE 1,Forest plot — per-condition accuracy with Wilson CIs
 import matplotlib.pyplot as plt
 
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_df = cost_df.dropna(subset=["accuracy", "mean_total_tokens"])
-ax.scatter(plot_df["mean_total_tokens"], plot_df["accuracy"], s=80)
-for _, r in plot_df.iterrows():
-    ax.annotate(r["condition"], (r["mean_total_tokens"], r["accuracy"]),
-                xytext=(5, 5), textcoords="offset points")
-ax.set_xlabel("Mean total tokens per vignette (cost proxy)")
-ax.set_ylabel("Accuracy")
-ax.set_title("Cost / accuracy Pareto frontier — LMIC deployment view")
-ax.grid(True, alpha=0.3)
+_GROUP_COLOR = {"anchor": "#2b8cbe", "primary": "#e34a33", "exploratory": "#7f7f7f"}
+
+fig_forest, ax_f = plt.subplots(figsize=(9, 5.5))
+plot_data = accuracy_table[accuracy_table["status"] == "ok"].copy()
+plot_data["yidx"] = range(len(plot_data))[::-1]  # top-down visual order
+ax_f.errorbar(
+    plot_data["accuracy"], plot_data["yidx"],
+    xerr=[plot_data["accuracy"] - plot_data["ci_low"], plot_data["ci_high"] - plot_data["accuracy"]],
+    fmt="o", capsize=4,
+    c="black", ecolor="black", markerfacecolor="black",
+)
+for _, r in plot_data.iterrows():
+    ax_f.scatter(r["accuracy"], r["yidx"], s=80, c=_GROUP_COLOR.get(r["group"], "k"), zorder=3)
+ax_f.set_yticks(plot_data["yidx"])
+ax_f.set_yticklabels(plot_data["label"])
+ax_f.set_xlim(0, 1)
+ax_f.set_xlabel("Accuracy (Wilson 95% CI)")
+ax_f.set_title("Per-condition accuracy")
+ax_f.grid(True, axis="x", alpha=0.3)
 plt.tight_layout()
 plt.show()
 
 # COMMAND ----------
 
-# MAGIC %md ## 7. Per-category accuracy across conditions
+# DBTITLE 1,Axis-effect plot — placement / format / sampling
+fig_axis, ax_axes = plt.subplots(1, 3, figsize=(13, 3.5), sharey=True)
+for ax, (axis, desc, left, right) in zip(ax_axes, AXIS_CONTRASTS):
+    r = run_contrast(f"axis_{axis}", left, right)
+    if r.get("status") != "ok":
+        ax.set_title(f"{axis} (missing)")
+        ax.axis("off")
+        continue
+    bars = ax.bar([ALL_CONDITIONS[left]["label"], ALL_CONDITIONS[right]["label"]],
+                   [r["accuracy_left"], r["accuracy_right"]],
+                   color=["#7f7f7f", "#e34a33"])
+    ax.set_ylim(0, 1)
+    ax.set_title(f"{axis}\nΔ={r['delta_pp']:+.1f} pp, p={r['p_uncorrected']:.3g}")
+    ax.tick_params(axis="x", labelrotation=20)
+ax_axes[0].set_ylabel("Accuracy")
+plt.suptitle("Architectural axis-effects (paired McNemar)")
+plt.tight_layout()
+plt.show()
 
 # COMMAND ----------
 
+# DBTITLE 1,Pareto plot — accuracy vs total tokens
+fig_pareto, ax_p = plt.subplots(figsize=(8, 5))
+plot_df = cost_df[cost_df.get("status", "").fillna("").astype(str) != "missing"].dropna(subset=["accuracy", "mean_total_tokens"])
+for _, r in plot_df.iterrows():
+    ax_p.scatter(r["mean_total_tokens"], r["accuracy"], s=80, c=_GROUP_COLOR.get(r["group"], "k"))
+    ax_p.annotate(r["label"], (r["mean_total_tokens"], r["accuracy"]),
+                  xytext=(5, 5), textcoords="offset points", fontsize=8)
+ax_p.set_xlabel("Mean total tokens per vignette")
+ax_p.set_ylabel("Accuracy")
+ax_p.set_title("Cost / accuracy frontier")
+ax_p.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# COMMAND ----------
+
+# MAGIC %md ## 10. Per-category accuracy heatmap (primary + B')
+
+# COMMAND ----------
+
+# DBTITLE 1,Per-category heatmap (focus on primary + B' for readability)
+HEATMAP_CONDS = ["B_prime"] + PRIMARY_CONDITIONS  # 5 conditions max for readability
 cat_df = pd.DataFrame()
-for cond, df in dfs.items():
-    cat_acc = df.groupby("category")["correct"].mean().rename(cond)
+for cond in HEATMAP_CONDS:
+    if cond not in dfs or "category" not in dfs[cond].columns:
+        continue
+    cat_acc = dfs[cond].groupby("category")["correct"].mean().rename(ALL_CONDITIONS[cond]["label"])
     cat_df = pd.concat([cat_df, cat_acc], axis=1)
 display(cat_df.round(3))  # noqa: F821
 
 # COMMAND ----------
 
-# MAGIC %md ## 8. Verifier characterization (E and B_prime_E)
+# MAGIC %md ## 11. Verifier characterization (per primary-study condition)
 # MAGIC
-# MAGIC When did the verifier fire? Did its firings correlate with corrections?
-# MAGIC As of the post-2026-05 patch, the full violations history is exported
-# MAGIC as a JSON-encoded column in the per-row parquet (`violations_history`).
-# MAGIC Legacy E parquets that pre-date the patch will lack the column; the
-# MAGIC block below handles both cases.
+# MAGIC Flag composition per condition. Under schema-gating, non-required-field
+# MAGIC flags are zero by construction — the distribution shown here is over
+# MAGIC required fields only.
 
 # COMMAND ----------
 
+# DBTITLE 1,Verifier characterization (symmetric across primary conditions)
 import json as _vh_json
 
 verifier_summaries: dict[str, dict] = {}
 
-for cond in ["E", "B_prime_E", "B_prime_E_reactive"]:
+for cond in PRIMARY_CONDITIONS:
     if cond not in dfs:
+        verifier_summaries[cond] = {"status": "missing"}
         continue
     df = dfs[cond]
     print(f"\n── {cond} ──")
     print(f"Total rows: {len(df)}")
-    print(f"{cond} accuracy: {df['correct'].mean():.1%}")
+    print(f"Accuracy:   {df['correct'].mean():.1%}")
 
-    # B as baseline for flip counts (same as the original E reconciliation logic)
-    if "B" in dfs:
-        b_correct_by_id = dict(zip(dfs["B"]["id"], dfs["B"]["correct"]))
+    # Vs B_prime as the natural baseline for all primary conditions.
+    if "B_prime" in dfs:
+        bp_correct = dict(zip(dfs["B_prime"]["id"], dfs["B_prime"]["correct"]))
         merged = df[["id", "correct"]].copy()
-        merged["b_correct"] = merged["id"].map(b_correct_by_id)
-        flips_to_correct = merged[(~merged["b_correct"]) & ( merged["correct"])]
-        flips_to_wrong   = merged[( merged["b_correct"]) & (~merged["correct"])]
-        print(f"{cond} flipped wrong→right vs B: {len(flips_to_correct)} rows")
-        print(f"{cond} flipped right→wrong vs B: {len(flips_to_wrong)} rows")
-        print(f"Net vs B: {len(flips_to_correct) - len(flips_to_wrong):+d}")
+        merged["bp_correct"] = merged["id"].map(bp_correct)
+        flips_w2r = merged[(~merged["bp_correct"]) & ( merged["correct"])]
+        flips_r2w = merged[( merged["bp_correct"]) & (~merged["correct"])]
+        print(f"Flipped wrong→right vs B': {len(flips_w2r)} rows")
+        print(f"Flipped right→wrong vs B': {len(flips_r2w)} rows")
+        print(f"Net vs B': {len(flips_w2r) - len(flips_r2w):+d}")
 
-    # Structured verifier-event analysis from the violations_history column.
     if "violations_history" not in df.columns:
-        verifier_summaries[cond] = {"note": "violations_history not in parquet (pre-patch run)"}
-        print("  (violations_history column not present — legacy parquet; skipping structured analysis)")
+        verifier_summaries[cond] = {"status": "no violations_history column (legacy parquet)"}
+        print("  (violations_history not in parquet — skipping flag composition)")
         continue
 
-    # Parse the JSON-encoded list of intervention events per row.
     parsed = df["violations_history"].apply(
         lambda s: _vh_json.loads(s) if isinstance(s, str) else (s or [])
     )
     intervention_mask = parsed.apply(lambda lst: len(lst) > 0)
     n_intervention_rows = int(intervention_mask.sum())
 
-    # Count total violations and tally by flagged field.
     total_violations = int(
         parsed.apply(lambda lst: sum(len(e.get("violations", [])) for e in lst)).sum()
     )
@@ -394,7 +518,6 @@ for cond in ["E", "B_prime_E", "B_prime_E_reactive"]:
                 f = v.get("field", "unknown")
                 field_counts[f] = field_counts.get(f, 0) + 1
 
-    # Of rows where the verifier intervened, how many ended correct?
     if n_intervention_rows > 0:
         n_correct_on_intervention = int(df.loc[intervention_mask, "correct"].sum())
         pct_correct = n_correct_on_intervention / n_intervention_rows * 100
@@ -413,8 +536,8 @@ for cond in ["E", "B_prime_E", "B_prime_E_reactive"]:
         "violations_by_field":                 dict(sorted(field_counts.items(), key=lambda kv: -kv[1])),
     }
     verifier_summaries[cond] = summary
-    print(f"  Verifier intervention rows: {n_intervention_rows} ({summary['pct_intervention_rows']:.1f}%)")
-    print(f"  Total violations:           {total_violations}")
+    print(f"  Intervention rows: {n_intervention_rows} ({summary['pct_intervention_rows']:.1f}%)")
+    print(f"  Total violations:  {total_violations}")
     print(f"  Of intervened rows, % correct: {summary['pct_correct_on_intervention_rows']:.1f}%")
     if field_counts:
         top = list(summary["violations_by_field"].items())[:5]
@@ -422,23 +545,174 @@ for cond in ["E", "B_prime_E", "B_prime_E_reactive"]:
 
 # COMMAND ----------
 
-# DBTITLE 1,Export — bundle all results + analysis into one zip
+# MAGIC %md ## 11.5 Mechanism diagnostics — citation acceptance + k-shot agreement
+# MAGIC
+# MAGIC Per-field acceptance / agreement rates from the new primary conditions'
+# MAGIC parquet columns:
+# MAGIC
+# MAGIC - **citation_reports** (from B_prime_E_reactive_citations) — per-field
+# MAGIC   {value, source_span, valid, reason}. Computes the fraction of spans
+# MAGIC   that passed substring validation, per field and overall.
+# MAGIC - **voting_reports** (from B_prime_E_reactive_kshot) — per-field
+# MAGIC   {samples, winner, count, accepted, reason}. Computes per-field
+# MAGIC   agreement distribution (3/3, 2/3, no-majority) and abstention rates.
+# MAGIC
+# MAGIC These power the discussion's "why did the mechanism arm work / not work"
+# MAGIC narrative. Empty for any condition that didn't produce these reports.
+
+# COMMAND ----------
+
+# DBTITLE 1,Mechanism diagnostics
+mechanism_diagnostics: dict[str, dict] = {}
+
+# Citation diagnostics ───────────────────────────────────────────────────────
+if "B_prime_E_reactive_citations" in dfs:
+    cit_df = dfs["B_prime_E_reactive_citations"]
+    if "citation_reports" in cit_df.columns:
+        parsed = cit_df["citation_reports"].apply(
+            lambda s: _vh_json.loads(s) if isinstance(s, str) else (s or [])
+        )
+        per_field_total:    dict[str, int] = {}
+        per_field_valid:    dict[str, int] = {}
+        per_reason_counts:  dict[str, int] = {}
+        n_total_spans = 0
+        n_valid_spans = 0
+        for vignette_reports in parsed:
+            for tool_call_entry in vignette_reports:
+                for field, rep in (tool_call_entry.get("report") or {}).items():
+                    n_total_spans += 1
+                    per_field_total[field] = per_field_total.get(field, 0) + 1
+                    if rep.get("valid"):
+                        n_valid_spans += 1
+                        per_field_valid[field] = per_field_valid.get(field, 0) + 1
+                    reason = rep.get("reason", "unknown")
+                    per_reason_counts[reason] = per_reason_counts.get(reason, 0) + 1
+
+        per_field_acceptance = {
+            f: {
+                "n_total":          per_field_total[f],
+                "n_valid":          per_field_valid.get(f, 0),
+                "acceptance_rate":  per_field_valid.get(f, 0) / max(per_field_total[f], 1),
+            }
+            for f in per_field_total
+        }
+        mechanism_diagnostics["citations"] = {
+            "n_total_spans":             n_total_spans,
+            "n_valid_spans":             n_valid_spans,
+            "overall_acceptance_rate":   n_valid_spans / max(n_total_spans, 1),
+            "by_reason":                 per_reason_counts,
+            "by_field":                  dict(sorted(
+                per_field_acceptance.items(),
+                key=lambda kv: -kv[1]["n_total"],
+            )),
+        }
+        print(f"\n── Citation acceptance ──")
+        print(f"  Spans seen:            {n_total_spans}")
+        print(f"  Validated (substring): {n_valid_spans} ({100*n_valid_spans/max(n_total_spans,1):.1f}%)")
+        print(f"  Rejection reasons:     {per_reason_counts}")
+        if per_field_acceptance:
+            top5 = sorted(per_field_acceptance.items(), key=lambda kv: -kv[1]["n_total"])[:5]
+            print(f"  Top fields by volume:")
+            for f, s in top5:
+                print(f"    {f:<25s} {s['n_valid']:>3d}/{s['n_total']:<3d} ({100*s['acceptance_rate']:.0f}%)")
+    else:
+        mechanism_diagnostics["citations"] = {"status": "citation_reports column missing"}
+        print("  citations: column missing (legacy parquet or stub run)")
+
+# k-shot diagnostics ─────────────────────────────────────────────────────────
+if "B_prime_E_reactive_kshot" in dfs:
+    ks_df = dfs["B_prime_E_reactive_kshot"]
+    if "voting_reports" in ks_df.columns:
+        parsed = ks_df["voting_reports"].apply(
+            lambda s: _vh_json.loads(s) if isinstance(s, str) else (s or [])
+        )
+        per_field_total:        dict[str, int] = {}
+        per_field_full_agree:   dict[str, int] = {}   # 3/3
+        per_field_partial:      dict[str, int] = {}   # 2/3
+        per_field_no_majority:  dict[str, int] = {}   # abstain
+        n_total = 0
+        n_full = 0
+        n_partial = 0
+        n_no_maj = 0
+        for vignette_reports in parsed:
+            for tool_call_entry in vignette_reports:
+                for field, rep in (tool_call_entry.get("report") or {}).items():
+                    n_total += 1
+                    per_field_total[field] = per_field_total.get(field, 0) + 1
+                    count = rep.get("count", 0)
+                    accepted = rep.get("accepted", False)
+                    if accepted and count >= 3:
+                        n_full += 1
+                        per_field_full_agree[field] = per_field_full_agree.get(field, 0) + 1
+                    elif accepted:
+                        n_partial += 1
+                        per_field_partial[field] = per_field_partial.get(field, 0) + 1
+                    else:
+                        n_no_maj += 1
+                        per_field_no_majority[field] = per_field_no_majority.get(field, 0) + 1
+
+        per_field_agreement = {
+            f: {
+                "n_total":         per_field_total[f],
+                "n_full_agree":    per_field_full_agree.get(f, 0),
+                "n_partial":       per_field_partial.get(f, 0),
+                "n_no_majority":   per_field_no_majority.get(f, 0),
+                "agreement_rate":  (per_field_full_agree.get(f, 0) + per_field_partial.get(f, 0))
+                                    / max(per_field_total[f], 1),
+            }
+            for f in per_field_total
+        }
+        mechanism_diagnostics["kshot"] = {
+            "n_total_field_votes":  n_total,
+            "n_full_agreement":     n_full,
+            "n_partial_agreement":  n_partial,
+            "n_no_majority":        n_no_maj,
+            "full_agreement_rate":  n_full / max(n_total, 1),
+            "partial_agreement_rate": n_partial / max(n_total, 1),
+            "no_majority_rate":     n_no_maj / max(n_total, 1),
+            "by_field":             dict(sorted(
+                per_field_agreement.items(),
+                key=lambda kv: -kv[1]["n_total"],
+            )),
+        }
+        print(f"\n── k-shot agreement ──")
+        print(f"  Field-votes seen:    {n_total}")
+        print(f"  3/3 agreement:       {n_full} ({100*n_full/max(n_total,1):.1f}%)")
+        print(f"  2/3 agreement:       {n_partial} ({100*n_partial/max(n_total,1):.1f}%)")
+        print(f"  No majority (null):  {n_no_maj} ({100*n_no_maj/max(n_total,1):.1f}%)")
+        if per_field_agreement:
+            top5 = sorted(per_field_agreement.items(), key=lambda kv: -kv[1]["n_total"])[:5]
+            print(f"  Top fields by volume:")
+            for f, s in top5:
+                print(f"    {f:<25s} 3/3={s['n_full_agree']:>3d}  2/3={s['n_partial']:>3d}  "
+                      f"none={s['n_no_majority']:>3d}  (n={s['n_total']})")
+    else:
+        mechanism_diagnostics["kshot"] = {"status": "voting_reports column missing"}
+        print("  kshot: column missing (legacy parquet or stub run)")
+
+# COMMAND ----------
+
+# MAGIC %md ## 12. Export bundle (all results + analysis)
+
+# COMMAND ----------
+
+# DBTITLE 1,Export §1 — provenance + manifest setup
 import hashlib, json, shutil, subprocess, zipfile
 from datetime import datetime, timezone
-from pathlib import Path
 
 REPO    = Path("/Workspace/Users/jack.yang@gatesfoundation.org/interwhen-karma-harness")
 OUT     = Path("/tmp/karma_export")
 shutil.rmtree(OUT, ignore_errors=True)
 OUT.mkdir(parents=True)
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+
 def sha256(p):
     h = hashlib.sha256()
     with open(p, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
 
 def git_sha(repo):
     try:
@@ -451,238 +725,179 @@ def git_sha(repo):
 # COMMAND ----------
 
 # DBTITLE 1,Export §1 — provenance
-# ── 1. Provenance ─────────────────────────────────────────────────────────────
 prov_dir = OUT / "provenance"
 prov_dir.mkdir()
-
 print("[1/9] provenance...")
 
-# pip freeze
 (prov_dir / "pip_freeze.txt").write_text(
     subprocess.check_output(["pip", "freeze"]).decode()
 )
 
-# run records from orchestrator
-agg = json.loads(Path("/dbfs/results/_AGGREGATED_RESULTS.json").read_text())
+agg = json.loads(Path("/dbfs/results/_AGGREGATED_RESULTS.json").read_text()) if Path("/dbfs/results/_AGGREGATED_RESULTS.json").exists() else {}
 run_records = agg.get("run_records", [])
 
-# cluster / runtime info
 try:
     dbr   = spark.conf.get("spark.databricks.clusterUsageTags.sparkVersion", "unknown")  # noqa: F821
     cname = spark.conf.get("spark.databricks.clusterUsageTags.clusterName", "unknown")   # noqa: F821
 except Exception:
     dbr, cname = "unknown", "unknown"
 
+# Pre-registered configuration snapshot (mirrors PREREG_CONFIG in 02_run_all.py).
+# Recorded here for the export bundle's provenance so reviewers can verify the
+# locked hyperparameters used during the rerun without opening the notebook.
+PREREG_CONFIG_SNAPSHOT = {
+    "schema_gated_verifier":          True,
+    "intervention_style":             "query",
+    "abstention":                     "prompt-only",
+    "sonnet_extraction_temperature":  0.7,
+    "sonnet_seed_strategy":           "fresh-per-call",
+    "qwen3_temperature":              0.0,
+    "tool_call_loop_turn_cap":        10,
+    "verifier_reprompt_cap":          2,
+    "citation_validity":              "verbatim-substring",
+    "citation_failure":               "null",
+    "kshot_voting_rule":              "majority-of-3",
+    "kshot_no_majority":              "null",
+    "kshot_k":                        3,
+    "failure_handling":               "drop-and-report",
+}
+
 provenance = {
     "exported_at":           datetime.now(timezone.utc).isoformat(),
     "harness_git_sha":       git_sha(REPO),
-    "interwhen_git_sha":     "2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e",  # pinned in 02_run_all Cell 3
+    "interwhen_git_sha":     "2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e",
     "dbr_version":           dbr,
     "cluster_name":          cname,
     "gpu_type":              "Standard_NC40ads_H100_v5 (H100 80GB, Azure)",
     "model_id":              "Qwen/Qwen3-30B-A3B-Thinking-2507",
-    "extractor_model_E":     "claude-sonnet-4-6",
+    "extractor_model":       "claude-sonnet-4-6",
     "dataset":               "ekacare/medical_calculator_eval",
     "dataset_split":         "test",
     "n_vignettes":           1066,
+    "study_design":          "9-condition pre-registered (paper §methods_conditions)",
+    "bonferroni_n":          BONFERRONI_N,
+    "primary_alpha":         PRIMARY_ALPHA,
+    "prereg_config":         PREREG_CONFIG_SNAPSHOT,
+    "all_conditions":        {k: {"group": v["group"], "label": v["label"]} for k, v in ALL_CONDITIONS.items()},
+    "primary_contrasts":     [{"label": l, "left": lt, "right": rt} for l, lt, rt in PRIMARY_CONTRASTS],
+    "axis_contrasts":        [{"axis": a, "left": lt, "right": rt, "description": d} for a, d, lt, rt in AXIS_CONTRASTS],
     "run_records":           run_records,
 }
 (prov_dir / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str))
 print("  provenance.json")
 
-# MCP calculator schemas snapshot — the preflight in 02_run_all dumps this to
-# /dbfs/results/provenance/mcp_calculator_schemas.json. It's the source of truth
-# for the verifier's vocabulary on this run; without it the bundle can't be
-# replayed exactly (EkaCare may have added calculators since).
 _mcp_schemas_src = Path("/dbfs/results/provenance/mcp_calculator_schemas.json")
 if _mcp_schemas_src.exists():
     shutil.copy(_mcp_schemas_src, prov_dir / "mcp_calculator_schemas.json")
     print("  mcp_calculator_schemas.json")
 else:
-    print("  WARNING: mcp_calculator_schemas.json not found — preflight didn't run?")
+    print("  WARNING: mcp_calculator_schemas.json not found")
 
 # COMMAND ----------
 
 # DBTITLE 1,Export §2 — locked prompts (verbatim)
-# ── 2. Prompts (verbatim) ─────────────────────────────────────────────────────
 print("[2/9] prompts...")
 prompts_dir = OUT / "prompts"
 prompts_dir.mkdir()
 
-# (a) Static condition prompts committed in prompts/
 conf_prompts = REPO / "prompts"
 if conf_prompts.exists():
     for f in sorted(conf_prompts.rglob("*")):
         if f.is_file():
             shutil.copy(f, prompts_dir / f.name)
             print(f"  {f.name}")
-else:
-    (prompts_dir / "_note.txt").write_text(f"prompts/ not found at {conf_prompts}")
-    print("  WARNING: prompts/ not found")
 
-# (b) Runtime-generated extractor prompt (regenerated by 02_run_all's preflight
-# from the MCP schema dump). This is the actual prompt Sonnet saw — the
-# committed prompts above don't include the extractor since it's derived
-# from MCP at run time.
 _runtime_extractor = Path("/dbfs/results/_runtime/extractor_prompt.txt")
 if _runtime_extractor.exists():
     shutil.copy(_runtime_extractor, prompts_dir / "extractor_prompt.txt")
     print("  extractor_prompt.txt (runtime-generated)")
-else:
-    print("  WARNING: runtime extractor_prompt.txt not found — preflight didn't run?")
 
 # COMMAND ----------
 
-# DBTITLE 1,Export §3 — raw per-vignette CSVs
-# ── 3. Raw per-vignette CSVs ──────────────────────────────────────────────────
+# DBTITLE 1,Export §3 — raw per-vignette CSVs (one per condition, all 9)
 print("[3/9] raw per-vignette rows...")
 raw_dir = OUT / "raw"
 raw_dir.mkdir()
-for cond, df in dfs.items():
-    df.to_csv(raw_dir / f"condition_{cond}.csv", index=False)
-    print(f"  condition_{cond}.csv  ({len(df)} rows, {df.shape[1]} cols)")
+for cond in PLOT_ORDER:
+    if cond not in dfs:
+        continue
+    dfs[cond].to_csv(raw_dir / f"condition_{cond}.csv", index=False)
+    print(f"  condition_{cond}.csv  ({len(dfs[cond])} rows, {dfs[cond].shape[1]} cols)")
 
 # COMMAND ----------
 
-# DBTITLE 1,Export §4 — analysis tables, comparisons, characterization
-# ── 4. Analysis outputs ───────────────────────────────────────────────────────
+# DBTITLE 1,Export §4 — analysis tables
 print("[4/9] analysis tables...")
 anal_dir = OUT / "analysis"
 anal_dir.mkdir()
 
-# accuracy + Wilson CIs
 accuracy_table.to_csv(anal_dir / "accuracy_table.csv", index=False)
-
-# primary McNemar + Bonferroni
 primary_df.to_csv(anal_dir / "primary_comparisons.csv")
+pd.DataFrame(exploratory_results).T.to_csv(anal_dir / "exploratory_comparisons.csv")
+axis_df.to_csv(anal_dir / "axis_effects.csv", index=False)
+if not stratified_df.empty:
+    stratified_df.to_csv(anal_dir / "stratified_tool_subset.csv", index=False)
+cost_df.to_csv(anal_dir / "cost_latency_table.csv", index=False)
+if not cat_df.empty:
+    cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
 
-# secondary B' vs B
-if "B_prime" in dfs and "B" in dfs:
-    x, y = paired_correctness(dfs["B_prime"], dfs["B"])
-    _res = mcnemar(x, y)
-    (anal_dir / "secondary_Bprime_vs_B.json").write_text(json.dumps({
-        "comparison":           "B_prime_vs_B",
-        "n_paired":             int(len(x)),
-        "accuracy_B_prime":     float(x.mean()),
-        "accuracy_B":           float(y.mean()),
-        "delta_pp":             float((x.mean() - y.mean()) * 100),
-        "mcnemar_b":            int(_res.b),
-        "mcnemar_c":            int(_res.c),
-        "p_uncorrected":        float(_res.pvalue),
-        "significant_at_0.05": bool(_res.pvalue < 0.05),
-    }, indent=2))
+# Paired rows joined across all loaded conditions on id (for downstream analysis).
+if dfs:
+    base = next(iter(dfs.values()))[["id"]].copy()
+    for cond, df in dfs.items():
+        cols = {"correct": f"{cond}_correct", "predicted": f"{cond}_predicted"}
+        if "n_tool_calls" in df.columns:
+            cols["n_tool_calls"] = f"{cond}_n_tool_calls"
+        base = base.merge(df[["id"] + list(cols.keys())].rename(columns=cols), on="id", how="left")
+    base.to_csv(anal_dir / "paired_rows.csv", index=False)
 
-# per-category accuracy
-cat_df.round(3).to_csv(anal_dir / "per_category_accuracy.csv")
-
-# stratified analysis (tool-using subset)
-if "B" in dfs:
-    b_tool_ids = set(dfs["B"][dfs["B"]["n_tool_calls"] > 0]["id"])
-    strat_rows = []
-    for cond in ["A", "B", "C", "D", "E", "B_prime_E", "B_prime_E_reactive"]:
-        if cond not in dfs:
-            continue
-        sub = dfs[cond][dfs[cond]["id"].isin(b_tool_ids)]
-        ci = wilson_ci(int(sub["correct"].sum()), len(sub))
-        strat_rows.append({"condition": cond, "n_subset": ci.n,
-                           "accuracy_on_subset": ci.accuracy,
-                           "ci_low": ci.lo, "ci_high": ci.hi})
-    pd.DataFrame(strat_rows).to_csv(anal_dir / "stratified_tool_subset.csv", index=False)
-
-# exploratory B_prime_E comparisons (post-hoc)
-for label, results in exploratory_results.items():
-    if "status" in results:
-        continue
-    (anal_dir / f"exploratory_{label}.json").write_text(json.dumps({
-        "comparison": label,
-        **results,
-    }, indent=2))
-
-# verifier characterization (E and B_prime_E)
+# Verifier characterization for primary conditions
 if verifier_summaries:
     (anal_dir / "verifier_characterization.json").write_text(json.dumps(verifier_summaries, indent=2))
 
-# cost / latency
-cost_df.to_csv(anal_dir / "cost_latency_table.csv", index=False)
+# Mechanism diagnostics — per-field citation acceptance + k-shot agreement
+# rates. Empty/absent when those conditions weren't run or used a legacy
+# parquet without the new columns.
+if mechanism_diagnostics:
+    (anal_dir / "mechanism_diagnostics.json").write_text(
+        json.dumps(mechanism_diagnostics, indent=2, default=str)
+    )
 
-# tool-use distribution per condition
-tool_rows = []
-for cond, df in dfs.items():
-    if "n_tool_calls" in df.columns:
-        for n_calls, cnt in df["n_tool_calls"].value_counts().sort_index().items():
-            tool_rows.append({"condition": cond, "n_tool_calls": int(n_calls), "count": int(cnt)})
-pd.DataFrame(tool_rows).to_csv(anal_dir / "tool_use_distribution.csv", index=False)
-
-# paired rows joined across all conditions on id
-base = list(dfs.values())[0][["id"]].copy()
-for cond, df in dfs.items():
-    cols = {"correct": f"{cond}_correct", "predicted": f"{cond}_predicted"}
-    if "n_tool_calls" in df.columns:
-        cols["n_tool_calls"] = f"{cond}_n_tool_calls"
-    base = base.merge(df[["id"] + list(cols.keys())].rename(columns=cols), on="id", how="left")
-base.to_csv(anal_dir / "paired_rows.csv", index=False)
-
-# Per-row flip reconciliation: each interwhen variant against its natural
-# baseline. E uses B (the no-verifier tools baseline); B_prime_E uses B_prime
-# (the forced-tool-use baseline). The flip_type tells you whether the
-# verifier helped, hurt, or did nothing for that vignette.
-for cond, baseline in [("E", "B"), ("B_prime_E", "B_prime"), ("B_prime_E_reactive", "B_prime")]:
-    if cond not in dfs or baseline not in dfs:
+# Per-row reconciliation: every primary condition against B_prime (its natural baseline).
+for cond in PRIMARY_CONDITIONS:
+    if cond not in dfs or "B_prime" not in dfs:
         continue
     sub = dfs[cond].copy()
-    base_correct = dict(zip(dfs[baseline]["id"], dfs[baseline]["correct"]))
-    sub["baseline_correct"] = sub["id"].map(base_correct)
+    bp_correct = dict(zip(dfs["B_prime"]["id"], dfs["B_prime"]["correct"]))
+    sub["baseline_correct"] = sub["id"].map(bp_correct)
     sub["flip_type"] = "no_change"
     sub.loc[(~sub["baseline_correct"]) & ( sub["correct"]), "flip_type"] = "wrong_to_right"
     sub.loc[( sub["baseline_correct"]) & (~sub["correct"]), "flip_type"] = "right_to_wrong"
-    out_cols = ["id", "correct", "baseline_correct", "flip_type", "n_tool_calls"]
+    out_cols = ["id", "correct", "baseline_correct", "flip_type"]
+    if "n_tool_calls" in sub.columns:
+        out_cols.append("n_tool_calls")
     sub[out_cols].to_csv(anal_dir / f"condition_{cond}_reconciliation.csv", index=False)
-    (anal_dir / f"condition_{cond}_verifier_summary.json").write_text(
-        json.dumps({
-            "condition":    cond,
-            "baseline":     baseline,
-            **sub["flip_type"].value_counts().to_dict(),
-        }, indent=2)
-    )
 
-print("  accuracy_table, primary_comparisons, secondary_Bprime_vs_B,")
-print("  exploratory_BprimeE_vs_Bprime, exploratory_BprimeE_vs_E,")
-print("  per_category, cost_latency, tool_use_distribution, paired_rows,")
-print("  E_reconciliation, B_prime_E_reconciliation, verifier_characterization,")
-print("  stratified_tool_subset")
+print("  accuracy_table, primary_comparisons, exploratory_comparisons,")
+print("  axis_effects, stratified_tool_subset, cost_latency_table,")
+print("  per_category_accuracy, paired_rows, verifier_characterization,")
+print("  per-condition reconciliation files")
 
 # COMMAND ----------
 
-# DBTITLE 1,Export §5 — Pareto + per-category heatmap
-# ── 5. Plots ──────────────────────────────────────────────────────────────────
-print("[5/9] plots...")
+# DBTITLE 1,Export §5 — figures
+print("[5/9] figures...")
 plots_dir = OUT / "plots"
 plots_dir.mkdir()
-
-# Pareto — reuse figure from Cell 17 (still in scope, plt.show() doesn't close it)
-fig.savefig(plots_dir / "pareto.png", dpi=150)
-plt.close(fig)
-
-# Per-category accuracy heatmap
-cat_vals = cat_df.values.astype(float)
-fig2, ax2 = plt.subplots(figsize=(max(6, len(cat_df.columns) * 1.2), max(4, len(cat_df) * 0.35)))
-im = ax2.imshow(cat_vals, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
-ax2.set_xticks(range(len(cat_df.columns)))
-ax2.set_xticklabels(cat_df.columns, fontsize=9)
-ax2.set_yticks(range(len(cat_df.index)))
-ax2.set_yticklabels(cat_df.index, fontsize=7)
-plt.colorbar(im, ax=ax2, label="Accuracy")
-ax2.set_title("Per-category accuracy by condition")
-plt.tight_layout()
-fig2.savefig(plots_dir / "per_category_heatmap.png", dpi=150)
-plt.close(fig2)
-
-print("  pareto.png, per_category_heatmap.png")
+fig_forest.savefig(plots_dir / "forest_accuracy.png", dpi=150)
+fig_axis.savefig(plots_dir / "axis_effects.png", dpi=150)
+fig_pareto.savefig(plots_dir / "pareto.png", dpi=150)
+plt.close("all")
+print("  forest_accuracy.png, axis_effects.png, pareto.png")
 
 # COMMAND ----------
 
 # DBTITLE 1,Export §6 — vLLM server log
-# ── 6. vLLM server log ───────────────────────────────────────────────────────
 print("[6/9] vLLM server log...")
 vllm_log = Path("/tmp/vllm_server.log")
 if vllm_log.exists():
@@ -695,20 +910,18 @@ else:
 # COMMAND ----------
 
 # DBTITLE 1,Export §7 — executed analysis notebook
-# ── 7. Executed analysis notebook ────────────────────────────────────────────
 print("[7/9] analysis notebook...")
 nb_src = REPO / "notebooks" / "03_analysis.ipynb"
 if nb_src.exists():
     shutil.copy(nb_src, OUT / "03_analysis_executed.ipynb")
-    print(f"  03_analysis_executed.ipynb")
+    print("  03_analysis_executed.ipynb")
 else:
     print(f"  WARNING: {nb_src} not found (export notebook as .ipynb manually)")
 
 # COMMAND ----------
 
 # DBTITLE 1,Export §8 — apparatus gate
-# ── 8. Study gates ────────────────────────────────────────────────────────────
-print("[8/9] study gates...")
+print("[8/9] apparatus gate...")
 gates_dir = OUT / "study_gates"
 gates_dir.mkdir()
 apparatus_p = RESULTS_DIR / "apparatus_full/rows.parquet"
@@ -716,9 +929,6 @@ if apparatus_p.exists():
     app_df = pd.read_parquet(apparatus_p)
     app_df.to_csv(gates_dir / "apparatus_results.csv", index=False)
     app_acc = app_df["correct"].mean()
-    # Pre-registered gate is 81.9% ± 3pp (see TESTING.md §1 and
-    # notebooks/01_apparatus_validation.py:76-77). Use the two-sided band, not
-    # a one-sided >= at the target.
     GATE_LO, GATE_HI = 0.789, 0.849
     gate_passed = bool(GATE_LO <= app_acc <= GATE_HI)
     (gates_dir / "apparatus_gate.json").write_text(json.dumps({
@@ -738,8 +948,7 @@ else:
 
 # COMMAND ----------
 
-# DBTITLE 1,Export §9 — MANIFEST.json (sha256 per file)
-# ── 9. Manifest (sha256 per file) ─────────────────────────────────────────────
+# DBTITLE 1,Export §9 — MANIFEST.json + zip
 print("[9/9] manifest...")
 manifest = []
 for f in sorted(OUT.rglob("*")):
@@ -749,7 +958,6 @@ for f in sorted(OUT.rglob("*")):
 (OUT / "MANIFEST.json").write_text(json.dumps(manifest, indent=2))
 print(f"  {len(manifest)} files indexed")
 
-# ── Zip to /tmp (next cell copies to UC Volume) ───────────────────────────────────────────────────────
 zip_path = Path("/tmp/karma_export.zip")
 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
     for f in OUT.rglob("*"):
@@ -757,19 +965,13 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.write(f, f.relative_to(OUT.parent))
 
 size_mb = zip_path.stat().st_size / 1024 / 1024
-print(f"\nDone. Zip: {size_mb:.1f} MB — run next cell to copy to UC Volume for download.")
+print(f"\nDone. Zip: {size_mb:.1f} MB — next cell copies to UC Volume.")
 
 # COMMAND ----------
 
-# DBTITLE 1,Download links (click to save to your computer)
-# Create volume if needed, copy zip there.
-# idm_main.default is the only schema writable without admin grants.
+# DBTITLE 1,Copy zip to UC Volume for download
 spark.sql("CREATE VOLUME IF NOT EXISTS idm_main.default.karma_results")  # noqa: F821
-
 src = Path("/tmp/karma_export.zip")
 dst = Path("/Volumes/idm_main/default/karma_results/karma_export.zip")
 shutil.copy(src, dst)
-
-size_mb = dst.stat().st_size / 1024 / 1024
-print(f"Done! {size_mb:.1f} MB")
-print("\nCatalog Explorer → idm_main → default → karma_results → karma_export.zip → right-click → Download")
+print(f"Done! {dst.stat().st_size / 1024 / 1024:.1f} MB at {dst}")

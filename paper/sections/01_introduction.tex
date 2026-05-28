@@ -43,52 +43,67 @@ verification surfaces, and our results say nothing about them directly.
 \subsection{The Verification Hypothesis}
 \label{sec:intro_hypothesis}
 
-We pre-registered three hypotheses, ordered by status:
+We study a single experimental factor: the architecture of the
+input-verification pipeline. Four primary hypotheses are
+pre-registered, one per architectural axis (\cref{sec:methods_stats}):
 
-\textbf{H1 (primary, pre-registered).} An interwhen-style deterministic
-input verifier comparing each tool-call payload against patient facts
-extracted from the case reduces wrong-input failures on
-\toolname{medical\_calculator\_eval}.
+\textbf{H1 (placement).} Best-practice procedural input verification
+with upfront full-schema extraction improves accuracy over the
+forced-tool baseline B$'$.
 
-\textbf{H2 (exploratory).} Combining a system prompt that forces tool use
-(B$'$) with the verifier compounds the verifier's effect.
+\textbf{H2 (placement).} Best-practice procedural input verification
+with reactive per-tool-call extraction improves accuracy over B$'$.
 
-\textbf{H3 (post-hoc diagnostic).} If H1 fails, replacing upfront
-full-schema extraction with per-tool-call focused extraction isolates
-whether the extractor architecture is the limiting factor.
+\textbf{H3 (output format).} Adding citation grounding to the
+reactive pipeline (\texttt{value} + verbatim source span) improves
+accuracy over the bare-value reactive baseline.
 
-H1 was the pre-registered primary; H2 and H3 are explicitly exploratory.
-Throughout, we keep the families visually and statistically distinct so
-readers cannot inadvertently treat exploratory results as pre-registered.
+\textbf{H4 (sampling).} Replacing single-sample reactive extraction
+with $k=3$ majority voting improves accuracy over the single-sample
+reactive baseline.
+
+``Best-practice'' here means schema-gated verifier comparison,
+query-style intervention prompts, and prompt-only calibrated
+abstention --- the three hygiene properties baked into all primary
+study conditions (\cref{sec:methods_prereg}). These properties are
+not factors under test; they were motivated by pilot diagnostics
+(\cref{sec:methods_pilots}) and are held constant across H1--H4.
 
 \subsection{Contributions and Roadmap}
 \label{sec:intro_contributions}
 
-This paper contributes the following. (i) An eight-condition evaluation
+This paper contributes the following. (i) A nine-condition evaluation
 of procedural input verification on a clinical tool-calling benchmark
-with pre-registered primary contrasts and clearly labeled exploratory
-follow-ups. (ii) A null primary result: no verifier configuration with an LLM-extracted reference
-significantly improved over the no-verifier baseline. (iii) A large
-exploratory negative finding: combining tool-forcing with upfront-extraction
-verification reduced accuracy by 9.0 percentage points
-(McNemar $p \approx 10^{-15}$). (iv) A flag-composition diagnostic
-locating the harm in the upstream LLM fact extractor rather than in the
-verifier's comparison logic. (v) A follow-up condition that partially
-supports a schema-size mechanism for the extractor's failure and
-substantially reduces token cost ($\sim$57\%) at unchanged median
-latency, independent of the accuracy verdict.
+under a best-practice pre-registered design that varies only the
+extractor pipeline across the four primary study conditions.
+(ii) Six pre-registered McNemar contrasts (Bonferroni
+$\alpha = 0.00833$) testing four hypotheses about extractor
+architecture: placement (upfront vs reactive), output format (bare vs
+citation-anchored), and sampling ($k=1$ vs $k=3$ majority vote).
+(iii) A pilot-diagnostic methodology section that documents the
+un-gated and correction-style variants that motivated the
+best-practice hygiene baked into the primary study, including a
+58.6\% non-required-field flag rate under un-gated extraction.
+(iv) A uniform per-condition logging schema and analysis surface that
+makes the four extractor pipelines directly comparable on accuracy,
+flag composition, and cost.
 
 We do \emph{not} claim that interwhen ``does not work.'' Our results
-adapt the mechanism to a setting that introduces an LLM-based reference
-layer absent from interwhen's original math and code domains, and that
-layer --- not the verifier --- is the binding constraint.
+adapt the mechanism to a setting where the verifier's reference must be
+an independent fact set extracted from the case --- a ground-truth
+reference layer that interwhen's trace-state extraction does not have to
+produce --- and the binding constraint, if one remains under
+best-practice configuration, is jointly that reference pipeline and the
+verifier's comparison surface.
 
 The rest of the paper is organized as follows. \Cref{sec:bg_interwhen}
 reviews the interwhen mechanism and the clinical-tool-calling setting.
-\Cref{sec:methods_benchmark} describes the apparatus, conditions, and
-statistical analysis. \Cref{sec:results_gate} reports the apparatus gate
-and primary contrasts; \cref{sec:results_exploratory,sec:results_diagnostic,sec:results_reactive}
-develop the exploratory negative finding, diagnose its mechanism, and
-test the schema-size hypothesis. \Cref{sec:disc_summary} synthesizes
-what we did and did not show, and what this implies for deploying
-intermediate verification in clinical AI.
+\Cref{sec:methods_benchmark} describes the apparatus, the nine
+conditions, the pre-registered configuration, and the statistical
+analysis. \Cref{sec:results_gate} reports the apparatus gate and the
+six pre-registered contrasts;
+\cref{sec:results_architecture,sec:results_diagnostic} develop the
+within-architecture comparisons and the post-hygiene flag
+composition. \Cref{sec:disc_summary} synthesizes what the results
+show and the implications for deploying intermediate verification in
+clinical AI.

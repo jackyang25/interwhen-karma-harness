@@ -11,13 +11,14 @@ Each item is a single-turn task: a case-narrative vignette in
 natural-language prose, a target calculator, an \emph{expected
 numerical value} for a designated primary output field, and a
 per-item tolerance. There is no conversation --- the model receives
-the vignette once and produces a single response. Each item also carries a per-row \emph{confinement instruction} ---
-a prompt suffix that instructs the model to reply with a single JSON
-object containing the primary field --- which the adapter appends to
-the vignette before generation. Scoring is binary: the harness
-extracts a numerical prediction from the model's reply (preferring
-fenced JSON blocks, falling back to the last number in the text),
-and the item is marked correct iff
+the vignette once and produces a single response. Each item also
+carries a per-row \emph{confinement instruction} --- a prompt suffix
+that instructs the model to reply with a single JSON object
+containing the primary field --- which the adapter appends to the
+vignette before generation. Scoring is binary: the harness extracts a
+numerical prediction from the model's reply (preferring fenced JSON
+blocks, falling back to the last number in the text), and the item is
+marked correct iff
 $|\text{predicted} - \text{expected}| \le \text{tolerance}$. Parse
 failures and missing-field responses score as wrong. All accuracy
 numbers in this paper are this strict tolerance-based binary
@@ -26,22 +27,23 @@ free-text prose rather than structured fields --- the reason an LLM
 extractor is required to populate the verifier's reference at all.
 Structured-input benchmarks (e.g., EHR-keyed inputs) would remove
 the extraction bottleneck this paper diagnoses. Curation details
-(vignette authorship, validation, calculator coverage) are
-documented in the KARMA release. The primary
-model under evaluation is Qwen3-30B-A3B-Thinking-2507~\citep{qwen3_thinking},
-served via vLLM~\citep{vllm2023} on the text-completions endpoint with
+(vignette authorship, validation, calculator coverage) are documented
+in the KARMA release. The primary model under evaluation is
+Qwen3-30B-A3B-Thinking-2507~\citep{qwen3_thinking}, served via
+vLLM~\citep{vllm2023} on the text-completions endpoint with
 temperature $0.0$, top-$p$ $1.0$, max generation length $4096$ tokens,
-and a tool-calling loop bounded at $10$ turns. All runs are
-deterministic by construction: temperature is zero, the MCP schema dump
-is frozen at the start of a run, and the extractor prompt is regenerated
-byte-identically from the schema dump.
+and a tool-calling loop bounded at $10$ turns. The primary model's
+sampling is deterministic by construction (temperature zero, frozen
+MCP schema dump). The extractor's sampling varies by condition and
+is documented in \cref{sec:methods_prereg}.
 
-The fact extractor used in conditions E, B$'$+E, and B$'$+E (reactive)
-is Claude Sonnet 4.6~\citep{claude_sonnet_4_6}, called with temperature $= 0.0$ and max\_tokens
-$= 8192$. The post-hoc verifier used in condition D is also Sonnet 4.6.
-We chose Sonnet rather than a sibling of Qwen3 to ensure the verifier's
-reference is not produced by the same model family as the primary, which
-would defeat the purpose of an external check.
+The fact extractor used in all extractor-enabled conditions is Claude
+Sonnet 4.6~\citep{claude_sonnet_4_6}, called with a single pinned
+model snapshot for the duration of each run. The post-hoc verifier
+used in exploratory condition D is also Sonnet 4.6. We chose Sonnet
+rather than a sibling of Qwen3 to ensure the verifier's reference is
+not produced by the same model family as the primary, which would
+defeat the purpose of an external check.
 
 \subsection{Compute and Serving Infrastructure}
 \label{sec:methods_compute}
@@ -49,225 +51,438 @@ would defeat the purpose of an external check.
 Qwen3 is served by a single vLLM process on an Azure NC40ads-H100-v5
 instance (one NVIDIA H100 80\,GB GPU), running on Databricks Runtime
 17.3 (GPU/ML build, Scala 2.13). Inference uses the text-completions
-endpoint, not chat completions, so the custom tool-calling loop driver
-can intercept generation at \verb|</tool_call>| stop tokens. Per-condition
-runs are parallelized across vignettes via a process pool; the worker
-count ranges from 32 to 128 depending on per-vignette Sonnet pressure
-(higher pressure $\rightarrow$ lower concurrency to respect API rate
-limits). Sonnet calls are dispatched against Anthropic's public API;
-no model weights other than Qwen3 run locally. Per-condition GPU-hours
-and estimated cloud costs are recorded in each result bundle's
-provenance file. As one data point: the longest single-condition run
-(B$'$+E reactive) consumed 9{,}232 seconds of wall clock on the H100,
-estimated at \$7.69 of GPU time at current Azure on-demand pricing.
+endpoint, not chat completions, so the custom tool-calling loop
+driver can intercept generation at \verb|</tool_call>| stop tokens.
+Per-condition runs are parallelized across vignettes via a process
+pool; the worker count ranges from 32 to 128 depending on per-vignette
+Sonnet pressure (higher pressure $\rightarrow$ lower concurrency to
+respect API rate limits). Sonnet calls are dispatched against
+Anthropic's public API; no model weights other than Qwen3 run locally.
+Per-condition GPU-hours and estimated cloud costs are recorded in
+each result bundle's provenance file.
 
 \subsection{Conditions: Design and Purpose}
 \label{sec:methods_conditions}
 
-Eight conditions, four pre-registered as the primary family and four
-exploratory, are summarized in \cref{tab:conditions}. We describe each
-group below.
+The study is organized around a single experimental factor: the
+\emph{architecture of the input-verification pipeline}. Nine
+conditions are partitioned into three groups (\cref{tab:conditions}):
+three \emph{anchors} that bound the room for verification to improve,
+four \emph{primary study} conditions that vary the extractor
+architecture under a fixed best-practice verifier, and two
+\emph{exploratory} conditions that test alternative verifier
+mechanisms (in-prompt self-verify and output-surface post-hoc check).
 
-\subsubsection{Capability Anchors}
+Each primary study condition is presented at its best-practice
+configuration: schema-gated verifier comparison, query-style
+intervention prompts, and prompt-only calibrated abstention. These
+three hygiene properties are identical across all primary study
+conditions and are documented in \cref{sec:methods_prereg}; they are
+not factors under test. The naive un-gated and correction-style
+variants used in earlier pilot runs are documented as design
+motivation in \cref{sec:methods_pilots}.
+
+\subsubsection{Capability Anchors (No Extractor)}
 \label{sec:methods_anchors}
 
-Conditions A and B bound the room for verification to improve.
-\textbf{A} disables tools entirely and uses no system prompt; it is the
-floor and reports what the primary model can answer from internal
-knowledge alone. \textbf{B} enables MCP tools with no system prompt; it
-is the pre-registered baseline used for the apparatus gate. If
-Sonnet's accuracy on B falls within $\pm 3$ pp of the published 81.9\%
-reference, the harness is treated as drift-free.
+\textbf{A} disables tools entirely and uses no system prompt; it is
+the capability floor, reporting what the primary model can answer
+from internal knowledge alone.
 
-\subsubsection{Primary Verifier Conditions (Pre-Registered)}
+\textbf{B} enables MCP tools with no system prompt; it is the
+pre-registered baseline used for the apparatus gate
+(\cref{sec:methods_gate}). If Sonnet's accuracy on B falls within
+$\pm 3$ pp of the published 81.9\% reference, the harness is treated
+as drift-free.
+
+\textbf{B$'$} enables tools and adds a system prompt that instructs
+the model to invoke a calculator rather than answering from prior
+knowledge (verbatim prompt in \cref{lst:prompt_bprime}). B$'$
+isolates the effect of forced tool use independent of any verifier
+and serves as the comparator for the primary study conditions.
+
+\subsubsection{Primary Study: Extractor Architecture}
 \label{sec:methods_primary}
 
-The primary family tests H1 by adding three different verification
-mechanisms to the B baseline.
+Four conditions share an identical verifier and intervention design;
+they differ only in the extractor pipeline. All four use the B$'$
+system prompt, the schema-gated deterministic verifier
+(\cref{sec:methods_verifier}), query-style intervention prompts, and
+prompt-only abstention.
 
-\textbf{C} (prompt-only self-verify) instructs the model in-prompt to
-verify its own reasoning before answering. No external machinery. This
-isolates whether the verifier signal needs to come from outside the
-model.
+\textbf{B$'$+E (upfront).} One Sonnet call per vignette, at run
+start, populating the union of all calculator schemas
+($\sim$500 fields). The extracted record is consulted for every
+subsequent tool-call interception.
 
-\textbf{D} (post-hoc Sonnet verifier) keeps Qwen3 as the primary, but
-after the final answer is produced, sends (case, candidate answer) to a
-Sonnet verifier (system prompt in \cref{lst:prompt_d}). The verifier
-returns a structured JSON object \verb|{consistent: bool, issue: str}|;
-if \texttt{consistent=false}, the natural-language \texttt{issue}
-sentence is injected verbatim into a templated revision prompt
-(``A reviewer flagged your previous answer: \emph{<issue>}. Please
-reconsider the case and provide a corrected JSON answer.''), and the
-primary is re-run exactly once. D is an output-surface comparator, the
-closest analog to ``check the final answer'' approaches.
+\textbf{B$'$+E (reactive).} One Sonnet call per
+\toolname{medical\_calculator\_output} tool call, scoped to the
+fields the active calculator declares. The extractor sees only the
+field names the calculator requests and the case text; it never sees
+the values the primary model proposed.
 
-\textbf{E} (interwhen-style deterministic input verifier) is the primary
-object of study. At each \verb|<tool_call>| Qwen3 emits, the verifier
-parses \toolname{arguments[``input\_data'']} and compares it field-by-field
-against the patient facts extracted upfront (one Sonnet call per
-vignette, full $\sim$500-field schema). On flag, the verifier injects
-feedback and re-prompts; on clean, it dispatches the MCP tool.
+\textbf{B$'$+E (reactive + citations).} Reactive extraction with the
+extractor returning, for each populated field, the exact source span
+in the vignette that supports the value. The span must match a
+substring of the vignette verbatim; if validation fails, the field
+is treated as null (abstention).
 
-\subsubsection{Exploratory: Tool-Forcing and Combination}
+\textbf{B$'$+E (reactive + k-shot).} Reactive extraction sampled $k=3$
+times per tool call at temperature $0.7$ with three independent
+seeds. The three samples are reduced per field by majority vote;
+three-way disagreement yields null (abstention).
+
+The architectural axis isolated by each pairwise contrast is given
+in \cref{tab:conditions} and the contrast logic in
+\cref{sec:methods_stats}.
+
+\subsubsection{Exploratory: Other Verifier Mechanisms}
 \label{sec:methods_exploratory}
 
-\textbf{B$'$} (force tool use) enables tools and adds a system prompt
-that instructs the model to invoke a calculator rather than answering
-from prior knowledge. B$'$ tests whether the model's tool-use behavior
-is the lever, independent of any verifier.
+Two conditions test verifier mechanisms outside the
+extractor--verifier architecture family. They are not in the primary
+contrast family and inherit their numbers from earlier pilot runs
+under fixed apparatus.
 
-\textbf{B$'$+E} (force + verifier) combines the B$'$ system prompt with
-the E verifier. Critically, the adapter is identical to E's: the only
-delta is the system prompt. This isolation matters --- it lets us
-attribute any difference between E and B$'$+E to the system prompt and
-its downstream interaction with the verifier, not to two unrelated
-code paths.
+\textbf{C} (prompt-only self-verify) instructs the model in-prompt
+to verify each input value against the case before calling a tool
+(prompt in \cref{lst:prompt_c}). No external extractor, no separate
+verifier.
 
-\subsubsection{Diagnostic: Reactive Fact Extraction}
-\label{sec:methods_reactive}
-
-\textbf{B$'$+E (reactive)} keeps the B$'$ system prompt, the
-verifier's comparison logic, the primary model, and the benchmark
-fixed. The only change is the extractor's regime: per-tool-call
-focused extraction instead of one upfront full-schema call
-(implementation in \cref{sec:methods_extractor_reactive}). This
-condition isolates the extractor architecture as a single variable,
-testing whether the full-schema design is the limiting factor.
+\textbf{D} (post-hoc Sonnet verifier) sends \texttt{(case, candidate
+answer)} to a Sonnet reviewer after the primary model produces a
+final answer (prompt in \cref{lst:prompt_d}). On flag, the model is
+re-prompted once with the reviewer's one-sentence issue. D is the
+closest analog to ``check the final answer'' verification approaches.
 
 \begin{table}[!htbp]
   \centering
-  \caption{Eight conditions, each isolating one factor in the
-  verification stack. Pre-registered primary family in italics.}
+  \caption{Nine conditions. Primary study conditions share identical
+  hygiene (schema-gated verifier, query intervention, prompt-only
+  abstention); they vary only in the extractor pipeline.}
   \label{tab:conditions}
-  \begin{tabular}{lcccc}
+  \begin{tabular}{llllll}
     \toprule
-    Condition & Tools & System prompt & Verifier & Extractor \\
+    Condition & Group & Tools & Sys. prompt & Verifier & Extractor pipeline \\
     \midrule
-    \textit{A}         & no  & none      & none        & --                  \\
-    \textit{B (baseline)} & yes & none & none & --                  \\
-    \textit{C}         & yes & none      & prompt-only & --         \\
-    \textit{D}         & yes & none      & post-hoc Sonnet & --     \\
-    \textit{E}         & yes & none      & deterministic & upfront  \\
-    B$'$               & yes & force-tool & none       & --         \\
-    B$'$+E             & yes & force-tool & deterministic & upfront  \\
-    B$'$+E (reactive)  & yes & force-tool & deterministic & per-call \\
+    A                              & anchor       & no  & none       & none           & --                       \\
+    B (baseline)                   & anchor       & yes & none       & none           & --                       \\
+    B$'$                           & anchor       & yes & force-tool & none           & --                       \\
+    B$'$+E (upfront)               & primary      & yes & force-tool & deterministic  & upfront full-schema       \\
+    B$'$+E (reactive)              & primary      & yes & force-tool & deterministic  & reactive per-call         \\
+    B$'$+E (reactive + citations)  & primary      & yes & force-tool & deterministic  & reactive + source spans   \\
+    B$'$+E (reactive + k-shot)     & primary      & yes & force-tool & deterministic  & reactive + $k{=}3$ vote   \\
+    C                              & exploratory  & yes & self-verify& prompt-only    & --                       \\
+    D                              & exploratory  & yes & none       & post-hoc Sonnet& --                       \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{The Deterministic Input Verifier}
+\subsection{Pre-Registered Configuration}
+\label{sec:methods_prereg}
+
+The four primary study conditions are run under identical hygiene and
+sampling configuration; the only inter-condition variation is the
+extractor pipeline. All values below are pre-registered and locked
+prior to the study run; no tuning to results is permitted.
+
+\subsubsection{Baked-In Hygiene}
+
+\textbf{Schema-gated verifier comparison.} The verifier compares
+\toolname{arguments[``input\_data'']} against the extracted record
+only on fields declared as \texttt{required} in the active
+calculator's JSON Schema. Fields the extractor populated but the
+calculator does not require are ignored at verify time. This
+suppresses flags on fields that cannot affect the calculator's
+output and was motivated by the pilot diagnostic in
+\cref{sec:methods_pilots} showing 58.6\% of legacy-condition flags
+fired on non-required fields.
+
+\textbf{Query-style intervention.} On flag, the verifier injects a
+prompt that presents the disagreement as a question to be resolved
+against the vignette, not as an assertion of model error (verbatim
+template in \cref{app:feedback_template}). The format names the
+disagreeing field, the model's proposed value, and the extractor's
+value, and asks the model to consult the case to determine which is
+supported.
+
+\textbf{Prompt-only calibrated abstention.} The extractor prompt
+instructs Sonnet to return \texttt{null} for any field whose value
+the case does not clearly state or imply. The verifier's existing
+no-flag rule on missing extractor values
+(\cref{sec:methods_verifier}) then applies. No confidence
+thresholding; no post-hoc adjustment.
+
+\subsubsection{Locked Run-Time Parameters}
+
+\Cref{tab:prereg_params} fixes the parameters that govern sampling,
+re-prompting, and failure handling. These are identical across all
+primary study conditions; the only inter-condition variation lives
+in the extractor pipeline row.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Pre-registered run-time parameters for the primary study.
+  Locked prior to the study run.}
+  \label{tab:prereg_params}
+  \begin{tabular}{ll}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    Sonnet snapshot                  & pinned per-run; logged in result bundle \\
+    Sonnet extraction temperature    & $0.7$ \\
+    Sonnet extraction $k$ samples    & $1$ (primary 3 cond.); $3$ (k-shot cond.) \\
+    Sonnet seed strategy             & fresh per call; no prompt caching \\
+    Qwen3 temperature                & $0.0$ \\
+    Tool-call loop turn cap          & $10$ \\
+    Verifier re-prompt cap (total)   & $2$ per vignette \\
+    Citation validity rule           & verbatim substring of vignette \\
+    Citation validation failure      & treat field as null (abstain) \\
+    k-shot voting rule               & per-field majority of 3 \\
+    k-shot no-majority behavior      & treat field as null (abstain) \\
+    Failure handling (incomplete vignettes) & drop from analysis; report dropped-$N$ per condition \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{Pilot-Batch Sanity Checks}
+
+Before committing to the full $N=1066$ run, a 30-vignette pilot batch
+verifies five properties of the implementation:
+(1) k-shot samples diverge string-wise across the three seeds;
+(2) the Qwen3 input for a given vignette in conditions B and B$'$ is
+bit-identical (catches preprocessing drift);
+(3) the re-prompt cap halts the loop when reached;
+(4) the abstention prompt produces \texttt{null} on a vignette with
+intentionally missing information;
+(5) the citation validator rejects a paraphrased source span.
+Failures on the pilot batch block the full run.
+
+\subsection{Pilot Diagnostics (Design Motivation)}
+\label{sec:methods_pilots}
+
+The hygiene properties baked into the primary study were not
+arbitrary defaults. Two pilot variants of B$'$+E (un-gated comparison
+surface, correction-style intervention) ran prior to the primary
+study and produced two findings that motivated the design.
+
+First, under the un-gated upfront variant, the verifier compared
+every field the extractor populated against the model's tool call,
+regardless of whether the active calculator required the field.
+Of $1{,}062$ total violations recorded across $N=1066$, $622$
+($58.6\%$) fired on fields the active calculator's JSON Schema does
+not declare as required; $181$ of those $622$ were on the
+\verb|sex| field alone. The schema-gated comparison rule
+(\cref{sec:methods_prereg}) eliminates this class of flag by
+construction.
+
+Second, the correction-style intervention prompt
+(``Your planned tool call has an input that does not match the
+patient case; re-read the case and call the tool again with
+corrected inputs''') re-prompted the model with an assertion that
+the verifier was correct. The query-style template
+(\cref{app:feedback_template}) presents the same information without
+that assertion, which lets the model adjudicate against the vignette
+rather than defer to the verifier's reference.
+
+These pilot results are reported in the result bundle for
+reproducibility but are \emph{not} conditions in the primary study.
+The primary study runs the best-practice versions only.
+
+\subsection{The Schema-Gated Deterministic Verifier}
 \label{sec:methods_verifier}
 
-A note on naming. We deliberately call the verifier
-\emph{deterministic}, not \emph{semantic}. Its comparison logic is
-purely structural: exact match on enums, numeric tolerance on numbers,
-canonical-form match on booleans. It does not reason about paraphrase,
-implication, equivalent encodings, or context. A true semantic
-verifier would, for example, recognize \texttt{sex=1} and
-\texttt{sex=`female'} as referring to the same patient attribute; ours
-does not (see \cref{fig:loop_trace} for a vignette where this is
-precisely the failure mode). Calling the mechanism ``deterministic''
-both reflects what it does and clarifies what it cannot do: any harm
-or help we attribute to ``the verifier'' is the harm or help of
-\emph{this} comparison logic, not of intermediate-verification in
-general.
+A note on naming. We call the verifier \emph{deterministic}, not
+\emph{semantic}. Its comparison logic is purely structural: exact
+match on enums, numeric tolerance on numbers, canonical-form match
+on booleans. It does not reason about paraphrase, implication,
+equivalent encodings, or context. The schema gate is the only
+non-trivial filter and is purely structural as well: it consults the
+active calculator's JSON Schema and restricts comparison to the
+fields the calculator declares as \texttt{required}.
 
-\Cref{fig:mechanism} shows the data flow. For each \verb|<tool_call>|
-emitted by Qwen3, the verifier (a) parses
-\toolname{arguments[``input\_data'']} into (field, value) pairs;
-(b) for each pair, looks up the extractor's value for that field;
-(c) if the extractor has no value for the field, \emph{skips} the field
-(no flag, conservative no-op); (d) if both have values, applies a
-deterministic comparison --- exact match for enums, numeric match within
-tolerance for numbers, canonical form for booleans --- and flags on
-mismatch.
+\Cref{fig:mechanism} shows the data flow. For each
+\verb|<tool_call>| emitted by Qwen3, the verifier
+(a) parses \toolname{arguments[``input\_data'']} into (field, value)
+pairs;
+(b) restricts the comparison set to fields the active calculator's
+schema declares as required (\emph{schema gate});
+(c) for each remaining pair, looks up the extractor's value for that
+field;
+(d) if the extractor has no value (abstention or missing),
+\emph{skips} the field (no flag);
+(e) if both have values, applies the deterministic comparison and
+flags on mismatch.
 
 \input{figures/mechanism.tex}
 
-On flag, the verifier injects a feedback template into the model's
-prompt --- naming the disagreeing field(s), the value the model
-proposed, and the value the extractor found --- and re-prompts. The
-MCP call is \emph{not} dispatched. The verbatim feedback template is
-reproduced in \cref{app:feedback_template}. On clean, the call is dispatched and the
-tool response is injected back into the prompt; the loop continues. On
-malformed JSON, the verifier requests a correction without comparison.
+On flag, the verifier injects the query-style intervention template
+(\cref{app:feedback_template}) into the model's prompt --- naming
+the disagreeing fields, the value the model proposed, and the value
+the extractor found --- and re-prompts. The MCP call is \emph{not}
+dispatched. On clean, the call is dispatched and the tool response is
+injected back into the prompt; the loop continues. On malformed JSON,
+the verifier requests a correction without comparison. Re-prompts
+per vignette are capped at the value in \cref{tab:prereg_params}.
 
-Two properties of this design are critical. First, the verifier is
-\emph{blind} to whether the extractor was right. It only knows whether
-the model and the extractor disagree on a field both populated; the
-extractor's value is treated as ground truth by construction. Second,
-the verifier's ``no value $\rightarrow$ no flag'' rule conservatively
-suppresses false positives at the cost of being silent when the
-extractor misses a field entirely.
+Three properties of this design are critical. First, the verifier is
+\emph{blind} to whether the extractor was right --- it only knows
+whether the model and the extractor disagree on a required field both
+populated; the extractor's value is treated as the reference by
+construction. Second, the verifier's ``no value $\rightarrow$ no
+flag'' rule conservatively suppresses false positives when the
+extractor abstains. Third, the schema gate guarantees that flags on
+fields the calculator's output does not depend on cannot occur, so
+the verifier's harm cannot be attributed to spurious flags on
+inactive fields.
 
 \subsection{The Fact Extractor}
 \label{sec:methods_extractor}
 
-The extractor's vocabulary is generated deterministically from the MCP
-per-calculator JSON Schemas via the schema dump. Because both the
-extractor and the verifier consume the same schemas, the verifier
-\emph{cannot ask about a field the extractor cannot in principle emit},
-and the extractor cannot emit a field the MCP backend does not
-recognize. This vocabulary alignment is a structural property of the
-design, not a runtime invariant we have to police.
+The extractor's vocabulary is generated deterministically from the
+MCP per-calculator JSON Schemas via the schema dump. Because both
+the extractor and the verifier consume the same schemas, the
+verifier \emph{cannot ask about a field the extractor cannot in
+principle emit}, and the extractor cannot emit a field the MCP
+backend does not recognize. This vocabulary alignment is a
+structural property of the design, not a runtime invariant we have
+to police.
 
-\subsubsection{Upfront Variant (E, \texorpdfstring{B$'$+E}{B'+E})}
+Four extractor pipelines are evaluated. All four share the same
+prompt header (\cref{lst:prompt_extractor_header}), abstention rule,
+and sampling temperature ($0.7$). They differ on three orthogonal
+axes:
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{Placement.} Where extraction happens relative to tool
+        calls: upfront (full-schema, once per vignette) or reactive
+        (scoped to the active calculator, once per tool call).
+  \item \textbf{Output format.} Whether each extracted field is a
+        bare value or a \texttt{(value, source\_span)} pair anchored
+        in the vignette text.
+  \item \textbf{Sampling.} Whether each field's value comes from a
+        single sample ($k=1$) or a majority vote over $k=3$
+        independent samples.
+\end{itemize}
+
+Each primary study condition is a single point in this space:
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item B$'$+E (upfront): upfront full-schema, bare values, $k=1$.
+  \item B$'$+E (reactive): reactive scoped, bare values, $k=1$.
+  \item B$'$+E (reactive + citations): reactive scoped, citation pairs, $k=1$.
+  \item B$'$+E (reactive + k-shot): reactive scoped, bare values, $k=3$ vote.
+\end{itemize}
+
+The mechanism arms (citations, k-shot) anchor on reactive rather
+than upfront for two reasons. First, $k=3$ over a $\sim$50K-token
+upfront prompt is not a credible deployment configuration. Second,
+each pairwise contrast against the reactive baseline isolates a
+single axis change (\cref{sec:methods_stats}), preserving
+orthogonality.
+
+\subsubsection{Upfront Pipeline}
 \label{sec:methods_extractor_upfront}
 
 One Sonnet call per vignette, at run start, covering the full
 $\sim$500-field union schema. The result is fixed for the duration of
-the vignette and consulted on every tool-call interception. Per-vignette
-cost: one large Sonnet call (mean $\sim$50K prompt tokens, see
-\cref{tab:cost}). Latency: a fixed cost at run start.
+the vignette and consulted on every tool-call interception. Across
+all $\sim$70 calculators in MedAI MCP, the union of property names
+exceeds 500 unique fields; the schema for any single calculator
+typically declares 3--30. One representative calculator's JSON
+Schema is reproduced verbatim in \cref{app:bmi_schema}.
 
-Across all $\sim$70 calculators in MedAI MCP, the union of property
-names exceeds 500 unique fields; the schema for any single calculator
-typically declares 3--30. One representative calculator's JSON Schema
-is reproduced verbatim in \cref{app:bmi_schema}.
-
-\subsubsection{Reactive Variant (\texorpdfstring{B$'$+E}{B'+E} reactive)}
+\subsubsection{Reactive Pipeline}
 \label{sec:methods_extractor_reactive}
 
-One focused Sonnet call per \toolname{medical\_calculator\_output} tool call.
-At each such call, the adapter parses the keys of the model's proposed
+One focused Sonnet call per
+\toolname{medical\_calculator\_output} tool call. At each such call,
+the adapter parses the keys of the model's proposed
 \verb|input_data|, builds a focused Sonnet prompt restricted to those
 fields, and runs extraction blind to the model's proposed values
 (the extractor sees field \emph{names} and the case text, never the
-values the model proposed). The result mutates the monitor's facts for
-the duration of that tool call's verification. Per-vignette cost
-scales with the number of \verb|_output| calls (mean $\sim$3.6 calls
-per vignette in our run); each call is small (typically 3--30 fields).
+values the model proposed). The result mutates the monitor's facts
+for the duration of that tool call's verification. Per-vignette
+cost scales with the number of \verb|_output| calls; each call is
+small (typically 3--30 fields).
 
-The only architectural difference between the upfront and reactive
-variants is \emph{when} extraction happens and over \emph{what} schema
-slice. The verifier, the monitor, the MCP transport, the loop driver,
-and the response schema are byte-identical.
+\subsubsection{Reactive + Citations Pipeline}
+\label{sec:methods_extractor_citations}
+
+Identical to the reactive pipeline, except each populated field is
+returned as \texttt{\{value, source\_span\}} where
+\texttt{source\_span} is a verbatim substring of the vignette text.
+A post-extraction validator confirms the substring property; if
+validation fails, the field is treated as null (abstention).
+Validation rejects paraphrase, normalization, and reformatting; only
+byte-identical spans are accepted. The verifier consults the
+\texttt{value} field for comparison but logs both for analysis.
+
+\subsubsection{Reactive + k-Shot Pipeline}
+\label{sec:methods_extractor_kshot}
+
+Identical to the reactive pipeline, except each focused Sonnet call
+is dispatched $k=3$ times with three independent seeds and identical
+prompt at temperature $0.7$. Samples are reduced per field by
+majority vote: a value present in $\ge 2$ of $3$ samples wins;
+three-way disagreement yields null (abstention). The three samples
+are dispatched in parallel where API rate limits permit, so the
+$k$-shot variant's latency is bounded by the single-sample latency
+plus serialization overhead, not by $3\times$ the single-sample
+latency.
+
+The only architectural differences across the four pipelines are
+\emph{when} extraction happens, \emph{what} the extractor returns,
+and \emph{how many independent samples} are taken. The verifier, the
+monitor, the MCP transport, the loop driver, and the response schema
+are byte-identical across all four.
 
 \subsection{Pre-Registered Statistical Analysis}
 \label{sec:methods_stats}
 
-The primary family has four contrasts against B: E vs B, D vs B,
-C vs B, and B vs A. With family $\alpha = 0.05$ and Bonferroni
-correction over $n = 4$ tests, the per-test threshold is
-$\alpha = 0.0125$. The outcome is paired binary correctness per
-vignette; the test is McNemar's exact test~\citep{mcnemar1947} on the discordant pairs.
-Per-condition accuracies are reported with Wilson~\citep{wilson1927} 95\% confidence intervals. Effect sizes ($\Delta$ accuracy in percentage points) are
-reported alongside $p$-values. Exploratory contrasts
-(B$'$ vs B, B$'$+E vs B$'$, B$'$+E vs E, B$'$+E reactive vs B$'$+E,
-B$'$+E reactive vs B$'$) are not in the primary family, are not
-Bonferroni-corrected, and are labeled exploratory throughout
-\cref{sec:results_primary,sec:results_exploratory,sec:results_reactive}.
+The primary contrast family targets the experimental factor
+(extractor architecture). Six paired comparisons are pre-registered;
+each isolates a single design axis:
+
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item B vs A --- does tool access help?
+  \item B$'$ vs B --- does forced tool use help, without verifier?
+  \item B$'$+E (upfront) vs B$'$ --- does upfront verifier-guided
+        extraction help over forced-tool baseline?
+  \item B$'$+E (reactive) vs B$'$ --- does reactive verifier-guided
+        extraction help over forced-tool baseline?
+  \item B$'$+E (reactive + citations) vs B$'$+E (reactive) --- does
+        citation grounding improve the reactive pipeline?
+  \item B$'$+E (reactive + k-shot) vs B$'$+E (reactive) --- does
+        $k$-shot voting improve the reactive pipeline?
+\end{enumerate}
+
+With family $\alpha = 0.05$ and Bonferroni correction over $n = 6$
+tests, the per-test threshold is $\alpha = 0.00833$. The outcome is
+paired binary correctness per vignette; the test is McNemar's exact
+test~\citep{mcnemar1947} on the discordant pairs. Per-condition
+accuracies are reported with Wilson~\citep{wilson1927} 95\%
+confidence intervals. Effect sizes ($\Delta$ accuracy in percentage
+points) are reported alongside $p$-values.
+
+A secondary contrast --- B$'$+E (upfront) vs B$'$+E (reactive),
+isolating placement holding all other axes fixed --- is reported
+as a within-architecture comparison; it is included in the same
+Bonferroni family if pre-registered as the seventh contrast, or as
+exploratory if not. The exploratory comparators C and D are not in
+the primary family and are not Bonferroni-corrected.
 
 \subsection{Apparatus Gate}
 \label{sec:methods_gate}
 
-Before accepting primary results, we replicated Sonnet on
-Condition B and required the resulting accuracy to fall within
-$[0.789, 0.849]$ --- $\pm 3$ pp of EkaCare's published 81.9\% reference
-for Sonnet on the medical\_calculator\_eval benchmark, reported in the
-KARMA framework release~\citep{karma2024}. The gate was specified in advance (see
-\verb|TESTING.md| in the harness repository) and is not adjustable
-post-hoc. Its purpose is drift detection on the harness, dataset,
-prompt rendering, and MCP transport. It is not a validation of the
-primary Qwen3 results --- we assume the harness behaves identically
-for the primary model conditional on the gate.
+Before accepting primary results, we replicated Sonnet on Condition
+B and required the resulting accuracy to fall within
+$[0.789, 0.849]$ --- $\pm 3$ pp of EkaCare's published 81.9\%
+reference for Sonnet on the medical\_calculator\_eval benchmark,
+reported in the KARMA framework release~\citep{karma2024}. The gate
+was specified in advance (see \verb|TESTING.md| in the harness
+repository) and is not adjustable post-hoc. Its purpose is drift
+detection on the harness, dataset, prompt rendering, and MCP
+transport. It is not a validation of the primary Qwen3 results ---
+we assume the harness behaves identically for the primary model
+conditional on the gate.

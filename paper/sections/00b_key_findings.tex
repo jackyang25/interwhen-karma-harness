@@ -1,26 +1,28 @@
+% =============================================================================
+% KEY FINDINGS — pending rewrite after the new 9-condition rerun.
+% Bonferroni n is now 6; per-test threshold is alpha=0.00833.
+% =============================================================================
+
+\textbf{[KEY FINDINGS TBD --- update after primary study rerun.]}
+
 \begin{itemize}\setlength\itemsep{3pt}
-  \item \textbf{Procedural input verification with an LLM-extracted
-        reference did not improve clinical tool-call accuracy.} Across
-        four pre-registered primary contrasts (Bonferroni
-        $\alpha=0.0125$), no verifier condition (E, D, C) significantly
-        beat the no-verifier baseline B.
-  \item \textbf{Under a tool-forcing system prompt the verifier
-        \emph{actively hurt} accuracy by 9.0 pp} (McNemar $p < 10^{-15}$).
-        118 vignettes flipped from correct to wrong; only 22 flipped the
-        other way.
-  \item \textbf{The harm came jointly from the reference and the
-        verifier's comparison surface.} A single field (\texttt{sex})
-        accounted for $\sim$32\% of all flags under upfront full-schema
-        extraction, and 58.6\% of all verifier flags fired on fields
-        the target calculator does not require --- implicating both
-        the extractor (populating unneeded fields) and the verifier
-        (comparing unneeded fields).
-  \item \textbf{Reactive per-tool-call extraction partially recovered
-        the diagnostic markers and cut cost, but not accuracy or
-        latency.} Sex fell to 13\% of flags, correct-rate on
-        intervention rows doubled, and total token cost dropped
-        $\sim$57\% --- but the accuracy gain vs upfront B$'$+E was not
-        significant ($+1.9$ pp, $p = 0.103$) and median wall-clock
-        latency was unchanged. Schema size is a contributor, not the
-        sole bottleneck.
+  \item \textbf{[TBD]} Does verifier-guided extraction at best-practice
+        configuration (schema-gated, query-intervention,
+        prompt-only abstention) improve accuracy over the forced-tool
+        baseline B$'$? Report McNemar $p$ vs B$'$ for upfront,
+        reactive, reactive+citations, reactive+k-shot.
+  \item \textbf{[TBD]} Does extraction placement (upfront vs reactive)
+        carry the effect? Within-architecture contrast at fixed
+        output format and sampling.
+  \item \textbf{[TBD]} Do mechanism arms close the gap? Citation
+        grounding (reactive+citations vs reactive) and $k$-shot
+        voting (reactive+k-shot vs reactive).
+  \item \textbf{[TBD]} Cost-accuracy tradeoff: which architecture is
+        Pareto-efficient on total tokens, on API tokens, and on
+        median wall-clock latency.
+  \item \textbf{Pilot diagnostic (motivation, not result):} Under
+        un-gated upfront extraction, 58.6\% of verifier flags fired
+        on fields the active calculator did not require, and 32\% of
+        flags fell on \texttt{sex} alone. The primary study runs
+        schema-gated by construction.
 \end{itemize}

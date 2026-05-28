@@ -75,6 +75,19 @@ class Qwen3Response:
     # "model was faithful, verifier correctly silent" from "extractor was
     # sparse, verifier had nothing to compare". Empty dict for non-E rows.
     extracted_facts: dict[str, Any] = field(default_factory=dict)
+    # Per-row mechanism diagnostics for the two new primary conditions.
+    # citation_reports: list of per-tool-call dicts produced by the
+    #   citations adapter. Each entry: {"wanted_fields": [...], "report":
+    #   {field: {"value", "source_span", "valid", "reason"}}}. Empty list
+    #   for every condition other than B_prime_E_reactive_citations.
+    # voting_reports: list of per-tool-call dicts produced by the k-shot
+    #   adapter. Each entry: {"wanted_fields": [...], "report":
+    #   {field: {"samples", "winner", "count", "accepted", "reason"}}}.
+    #   Empty list for every condition other than B_prime_E_reactive_kshot.
+    # Both are serialized as JSON strings into the per-row parquet via
+    # harness/runner.py, mirroring the violations_history shape.
+    citation_reports: list[dict[str, Any]] = field(default_factory=list)
+    voting_reports: list[dict[str, Any]] = field(default_factory=list)
 
 
 class Qwen3Adapter:

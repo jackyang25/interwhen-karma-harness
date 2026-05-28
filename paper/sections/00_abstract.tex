@@ -1,3 +1,20 @@
+% =============================================================================
+% ABSTRACT — pending rewrite after the new 9-condition rerun.
+%
+% The narrative below corresponds to the prior 8-condition run (un-gated
+% comparison surface, correction-style intervention). It is preserved as
+% scaffolding so the structure is in place when new numbers arrive. After
+% the rerun, replace the discussion of mechanisms with the best-practice
+% study results: (1) does verifier-guided extraction help under
+% schema-gating + query intervention + abstention? (2) does extraction
+% placement (upfront vs reactive) matter? (3) do citations or k-shot
+% voting close any residual gap to B'?
+%
+% Bonferroni n is now 6 (not 4); per-test threshold is now alpha=0.00833.
+% =============================================================================
+
+\textbf{[ABSTRACT TBD --- update after primary study rerun.]}
+
 Verifier-guided reasoning (interwhen-style) intercepts an LLM's intermediate
 reasoning steps and asks an external verifier to approve them before they
 take effect. We evaluate this mechanism in a clinical decision-support
@@ -7,26 +24,28 @@ medical\_calculator\_eval ($N=1066$) and Qwen3-30B-A3B-Thinking-2507 as the
 primary model. The verifier compares each (field, value) pair the model
 proposes to dispatch to an MCP medical calculator against a reference set
 of facts extracted from the case by Sonnet 4.6.
-Across four pre-registered primary contrasts (Bonferroni $\alpha=0.0125$),
-no verifier configuration \emph{with an LLM-extracted reference}
-significantly improved over the no-verifier baseline. In exploratory analyses, combining a tool-forcing system prompt
-with the verifier (B$'$+E) actively reduced accuracy by 9.0 percentage
-points (McNemar $p < 10^{-15}$, 118 correct$\rightarrow$wrong vs 22
-wrong$\rightarrow$correct). A flag-composition diagnostic traced this
-harm to the upstream \emph{fact extractor}, not to the verifier's
-comparison logic: a single field (sex) accounted for $\sim$32\% of all
-verifier flags under upfront full-schema extraction. A follow-up condition
-replacing upfront extraction with per-tool-call focused extraction
-\emph{partially} validated the schema-size hypothesis --- the sex
-fraction fell to 13\%, the correct-rate on intervention rows doubled
-(14\%$\rightarrow$24\%), and total token cost dropped $\sim$57\% --- but
-accuracy did not significantly recover (+1.9 pp, $p=0.103$), and
-median wall-clock latency was unchanged (per-call schema-size savings
-cancel against $\sim$3.6 sequential extraction calls). We conclude
-that in clinical settings where the verifier's reference must be
-LLM-extracted from free-text input, the binding constraint is
-\emph{jointly} the reference pipeline and the verifier's comparison
-surface: 58.6\% of B$'$+E violations fired on fields the target
-calculator did not require. Deployment should validate the extractor
-on the relevant field set \emph{and} schema-gate the verifier's
-comparisons before adopting intermediate-verification machinery.
+
+We study a single experimental factor, the architecture of the
+input-verification pipeline, across four primary conditions presented at
+their best-practice configuration (schema-gated verifier comparison,
+query-style intervention prompts, prompt-only calibrated abstention).
+The four conditions span three orthogonal axes: extraction placement
+(upfront full-schema vs reactive per-tool-call), output format (bare
+values vs citation-anchored pairs), and sampling ($k=1$ vs $k=3$ majority
+vote). Six paired McNemar contrasts are pre-registered at family
+$\alpha=0.05$ (Bonferroni-corrected per-test $\alpha=0.00833$).
+
+\textbf{[Headline results TBD]} --- to be filled after the primary
+study rerun. Expected structure: (1) whether any extractor pipeline
+improves accuracy over the forced-tool baseline B$'$ at the
+pre-registered significance level; (2) which architectural axis
+(placement, format, sampling) carries the effect, if any;
+(3) cost-accuracy tradeoffs across the four pipelines.
+
+Two pilot diagnostics motivated the best-practice configuration:
+under un-gated upfront extraction, 58.6\% of verifier flags fired on
+fields the active calculator did not declare as required, and a
+single field (sex) accounted for 32\% of all flags. The schema gate
+suppresses this class of flag by construction; the query-style
+intervention removes the verifier's assertion of model error,
+allowing the model to adjudicate against the vignette text.

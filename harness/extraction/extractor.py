@@ -48,10 +48,12 @@ class FactExtractor:
         model: str = DEFAULT_EXTRACTOR_MODEL,
         api_key: str | None = None,
         max_tokens: int = 8192,
+        temperature: float = 0.7,
     ):
         self.system_prompt = open(prompt_path).read().strip()
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
         self.client = anthropic.Anthropic(api_key=api_key or os.environ["ANTHROPIC_API_KEY"])
 
     def extract(self, vignette: str) -> PatientFacts:
@@ -74,7 +76,7 @@ class FactExtractor:
             resp = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                temperature=0.0,
+                temperature=self.temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": vignette}],
             )

@@ -156,6 +156,10 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         n_fixes_applied = getattr(resp, "n_fixes_applied", 0)
         violations_history = getattr(resp, "violations_history", []) or []
         extracted_facts = getattr(resp, "extracted_facts", {}) or {}
+        # Per-row mechanism diagnostics for the two new primary conditions.
+        # Both default to [] for every other condition.
+        citation_reports = getattr(resp, "citation_reports", []) or []
+        voting_reports = getattr(resp, "voting_reports", []) or []
         # Cost / latency breakouts (populated by the E adapter; 0 elsewhere).
         # These let cost_latency_table separate Sonnet-API cost from on-GPU
         # inference, so deployment readers can see what's billed where.
@@ -184,6 +188,8 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         n_fixes_applied = 0
         violations_history = []
         extracted_facts = {}
+        citation_reports = []
+        voting_reports = []
         extractor_prompt_tokens = 0
         extractor_completion_tokens = 0
         extractor_elapsed_s = 0.0
@@ -237,6 +243,12 @@ def _score_one(adapter: Adapter, row: dict[str, Any], system: str | None) -> dic
         # JSON-encoded extracted patient facts (E and B'+E only; "{}" elsewhere).
         # This is what the verifier was comparing planned tool args against.
         "extracted_facts": json.dumps(extracted_facts),
+        # JSON-encoded mechanism diagnostics for the two new primary conditions.
+        # "[]" for every other condition. Same shape conventions as
+        # violations_history so the analysis notebook can load and reduce
+        # uniformly with .apply(json.loads).
+        "citation_reports": json.dumps(citation_reports),
+        "voting_reports": json.dumps(voting_reports),
         # Honest cost / latency breakouts. Zero for non-E conditions.
         "extractor_prompt_tokens": extractor_prompt_tokens,
         "extractor_completion_tokens": extractor_completion_tokens,

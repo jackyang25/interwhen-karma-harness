@@ -1,9 +1,30 @@
 % =============================================================================
 % DISCUSSION
-% Purpose: synthesize. Each subsection makes ONE claim and bounds it.
-% The last subsection is dedicated to anti-misinterpretation -- explicitly
-% naming the wrong takeaways readers might draw.
+%
+% NOTE: This section corresponds to the prior 8-condition run. The new
+% 9-condition study under best-practice configuration (schema-gated
+% verifier, query intervention, prompt-only abstention) requires a full
+% rewrite once results are in. The structural skeleton below is reusable
+% (claims-ordered-by-certainty + mechanism narrative + threats to
+% validity + anti-misinterpretation) but every numerical claim and
+% per-condition framing must be updated.
+%
+% Specifically:
+%   - Replace the "verifier did not help" / "verifier actively hurt"
+%     framing with the rerun's headline.
+%   - Recast the 58.6% non-required-field flags from a finding into a
+%     pilot diagnostic (already done in methods sec:methods_pilots).
+%   - Update sec:disc_extractor to reflect which axes (placement,
+%     citation, k-shot) carried any effect.
+%   - Update sec:disc_limitations to remove the "we did not test schema
+%     gating" caveat — it is now baked in.
+%   - Keep the cost-model framing (terms a/b/c) — it transfers cleanly
+%     to the new design and is the right lens for explaining any
+%     residual harm.
+%
 % =============================================================================
+
+\textbf{[DISCUSSION TBD --- full rewrite pending after primary study rerun. Prior-run prose retained below as scaffolding.]}
 
 \subsection{What the Results Show}
 \label{sec:disc_summary}
@@ -366,9 +387,10 @@ To preempt common misreadings, we name five claims this paper does
 
 \textbf{1. ``Interwhen does not work.''} It does. Interwhen's mechanism
 operated mechanically as designed in every condition we ran. Our
-clinical adaptation introduces an LLM-based reference layer absent
-from interwhen's original math and code settings, and \emph{that layer}
-is the limit. The verifier itself is sound.
+clinical adaptation repurposes interwhen's LLM extraction step to
+recover an independent ground-truth reference from the case, rather
+than the model's own asserted state from the trace, and \emph{that
+reference layer} is the limit. The verifier itself is sound.
 
 \textbf{2. ``Verification of LLM outputs is unhelpful.''} We did not
 test output verification as our central question. We studied procedural

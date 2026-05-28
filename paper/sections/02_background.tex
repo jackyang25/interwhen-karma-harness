@@ -1,27 +1,36 @@
 \subsection{Verifier-Guided Reasoning (Interwhen)}
 \label{sec:bg_interwhen}
 
-Interwhen~\citep{bhat2026interwhen} is a verifier-guided reasoning framework
-in which a \emph{VerifyMonitor} intercepts an LLM's generation at
-structured commit points, runs a verifier against the current state,
-and on violation injects feedback and re-prompts the model. The framework is mechanism-agnostic
-to the verifier itself: any computable predicate on the intermediate
-state can serve. Interwhen's original evaluations targeted math and
-code, where the reference for verification is the trace state itself
-(a partial proof, a partial program) and no external reference pipeline
-is required.
+Interwhen~\citep{bhat2026interwhen} is a verifier-guided reasoning
+framework in which a monitor periodically polls an LLM's reasoning
+trace, forks the model to extract verifiable state from the partial
+trace, and runs verifiers on that state asynchronously --- injecting
+feedback and re-prompting only when a violation is detected. The
+verifiers are code-based predicates over partial traces and can be
+synthesized automatically from natural-language policy documents,
+including provably correct variants in Lean and z3. Interwhen is
+evaluated across both non-agentic reasoning (math, logic) and agentic
+tool-calling benchmarks (e.g., $\tau^2$-bench). Crucially for our
+adaptation, the state the verifier consumes is itself recovered by an
+LLM extraction step over the trace, and interwhen explicitly analyzes
+the framework's robustness to errors in that extraction.
 
-We adapt the mechanism rather than re-implement it. Our intercept point
-is the moment the primary model emits a \verb|<tool_call>| block; our
-``trace state'' is the parsed tool-call JSON; our verifier is a
-deterministic field-by-field comparison against an external reference.
-We preserve interwhen's verify/fix semantics exactly --- on flag, inject
-feedback and re-prompt; on clean, dispatch the tool and continue ---
-and change only the transport. We use vLLM's text-completions endpoint
-with a custom synchronous loop driver rather than the streaming-completions
-variant, because the primary model is served behind a standard
-completions API. This is an implementation detail, not a methodological
-deviation.
+We adapt the mechanism rather than re-implement it, preserving
+interwhen's verify/fix control flow exactly --- on flag, inject
+feedback and re-prompt; on clean, dispatch the tool and continue.
+Three things change. First, instead of polling the trace at intervals,
+we fix the intercept at a single deterministic commit point: the
+moment the primary model emits a \verb|<tool_call>| block, whose parsed
+JSON is the state under check. Second, the LLM extraction reads the
+patient \emph{case} --- the task input --- rather than the model's own
+reasoning trace; interwhen recovers the model's asserted state from the
+trace and checks it against a policy, whereas we recover an independent
+reference from the case and check the model's proposed inputs against
+it. Third, in place of a policy-synthesized verifier we use a
+hand-built deterministic field-by-field comparator. The transport also
+differs: we use vLLM's text-completions endpoint with a custom
+synchronous loop driver rather than the streaming variant, because the
+primary model is served behind a standard completions API.
 
 \subsection{Clinical Tool-Calling and KARMA}
 \label{sec:bg_karma}
@@ -76,19 +85,42 @@ external machinery necessary?''
 This paper concerns the first surface. Every claim about ``the
 verifier'' refers to procedural input verification specifically.
 
+Procedural input verification is a \emph{special case} of
+reasoning-trace verification: the model's tool-call emission is one
+step in its trace, and we intercept at that step. What distinguishes
+our setting is where the verifier's reference comes from and where the
+commit point sits. Interwhen recovers verifiable state by polling the
+trace at intervals; in a clinical agent most of that trace is
+unstructured prose, and the reference the verifier needs --- the
+patient's actual values --- is not in the trace at all but in the case
+text. The model's typed tool-call payload is the first point in the
+trace where a machine-checkable structured commit exists, and the
+calculator's input schema defines exactly what fields constitute that
+commit. A flag therefore
+localizes to a specific (calculator, field, value) tuple --- auditable
+in the way clinical safety reviews require. Second, existing clinical
+decision-support pipelines already \emph{have} these tool boundaries
+(risk calculators, formularies, eligibility checkers, FHIR queries),
+so input verification inserts at a place the deployment architecture
+already exposes, rather than requiring the workflow to be restructured
+around inline reasoning checks.
+
 \subsection{The Reference-Extraction Problem}
 \label{sec:bg_reference}
 
-A subtlety unique to the clinical adaptation deserves explicit attention:
-\emph{the reference itself must come from somewhere}. In math and code,
-the trace state \emph{is} the reference --- the verifier can check a
-partial proof or compiled program against itself. In a clinical
-tool-calling setting, the case is presented as natural-language text,
-not as a structured record. Before the verifier can compare anything,
-the case must be parsed into field--value pairs. This parsing step is
-the introduction of a model-based component into a previously
-deterministic verification path, and it is where the verifier's safety
-guarantee can weaken.
+A subtlety in the clinical adaptation deserves explicit attention:
+\emph{the reference itself must come from somewhere}. Interwhen already
+relies on an LLM to extract the verifier's input variables, but it
+extracts them from the model's own reasoning trace --- the state the
+verifier checks is the model's asserted state, scored against a policy.
+In our setting the verifier instead needs the patient's true values,
+which live only in the natural-language case. Before the verifier can
+compare anything, the case must be parsed into field--value pairs by an
+LLM, and that extracted record is then treated as the reference against
+which the model's proposed inputs are judged. The model-based
+extraction step is therefore not new to interwhen; what is new is that
+it now stands between the case and the verifier as the source of ground
+truth, which is where the verifier's safety guarantee can weaken.
 
 We use an external LLM of a different model family than the primary
 to produce the reference (specific model, version, and serving
@@ -97,3 +129,35 @@ design is that the extractor is itself an LLM, with its own
 distribution of errors. This paper's main finding is that those
 errors --- not the verifier mechanism --- bound the achievable
 accuracy.
+
+\subsection{Which Failure Classes Input Verification Can Reach}
+\label{sec:bg_scope}
+
+EkaCare's own error analysis of
+medical\_calculator\_eval~\citep{ekacare_error_analysis} identifies two
+failure classes that persist even with tool access. The first is
+\emph{wrong calculator selected} --- the model picks a semantically
+adjacent but distinct tool (e.g., a generic BMI calculator where a
+sex-specific variant is required). The second, affecting 12--13\% of
+samples across the three models they evaluated, is \emph{right
+calculator, wrong inputs}, which decomposes into (a) enum misselection
+(mapping ``sedentary'' to ``very\_active'' in a TDEE activity field)
+and (b) unit-conversion overreach, where the model receives a correct
+calculator result and then rewrites it into a different unit,
+introducing an error the calculator did not make.
+
+Procedural input verification is scoped to exactly one of these
+sub-classes. It fires before dispatch on the tool-call payload, so it
+can catch enum misselection and analogous wrong-input errors at the
+boundary --- sub-class (a) above. It \emph{cannot} reach sub-class (b):
+unit-conversion overreach occurs after the calculator returns, on the
+output surface, where only a post-hoc check such as Condition D could
+intervene. Wrong-calculator selection is likewise out of scope --- the
+verifier checks field values for the calculator the model has already
+chosen, not the choice of calculator itself. The addressable ceiling
+for the primary study conditions is therefore the enum/wrong-input
+portion of the 12--13\% band, not the full band; we report the split
+where the logs permit and calibrate expected effect sizes accordingly.
+Condition D is the only arm positioned to reach the unit-overreach
+sub-class, and it targets a different failure than the B$'$+E
+conditions rather than a more thorough version of the same one.

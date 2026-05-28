@@ -209,6 +209,60 @@ def render_focused_prompt(
     return _PROMPT_HEADER + schema_body + "\n"
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Citation-grounded prompt (reactive + citations variant).
+# ──────────────────────────────────────────────────────────────────────────────
+_CITATION_PROMPT_HEADER = """\
+You are a medical fact extractor. Read the patient vignette and return a strict JSON object capturing every value the case explicitly states for the fields below, with the exact source text that supports each value.
+
+Return ONLY a JSON object (no prose, no markdown fences). For each field you can populate, return an object of the form {"value": <extracted_value>, "source_span": "<verbatim quote from the vignette>"}. The source_span must be a VERBATIM substring of the patient vignette — copy the supporting text exactly, with original spacing and punctuation. Do NOT paraphrase, normalize, or summarize the source_span.
+
+Include ONLY the fields the case explicitly states a value for. Omit any field the case does not state — do not emit null for absent fields, and do not invent a source_span for a field whose value you cannot anchor to a specific quote.
+
+Rules:
+- Include only what the case explicitly states. If a value must be inferred, computed, or guessed, omit the field.
+- Use the units the case provides. Do not convert units. If the case says "creatinine 130 µmol/L", store 130 and quote "creatinine 130 µmol/L" or similar.
+- For ranges (e.g. "BP 140/90"), split into the appropriate fields with source_spans pointing to the same phrase.
+- For descriptors that map to a calculator's enum (e.g. "sedentary lifestyle" → "sedentary"), use the enum value and quote the descriptor verbatim.
+- If the source_span you would write is not a verbatim substring of the vignette, omit the field entirely.
+- Return only valid JSON. No commentary.
+
+Schema (allowed field names with type/range/enum constraints):
+"""
+
+
+def render_focused_prompt_with_citations(
+    schema_dump: dict[str, Any],
+    field_names: list[str] | set[str] | tuple[str, ...],
+) -> str:
+    """Generate a focused Sonnet system prompt that asks for (value, source_span)
+    per field. Used by the B_prime_E_reactive_citations condition.
+
+    The returned schema body is the same as render_focused_prompt() — the only
+    differences vs the bare variant are (a) the prompt header instructs Sonnet
+    to return {value, source_span} objects per field and (b) the source_span
+    must be a verbatim substring of the vignette (validated downstream by
+    harness.extraction.citations.validate_substring; mismatches coerce the
+    field to null at the adapter layer, mirroring the abstention path).
+    """
+    field_union = build_field_union(schema_dump)
+    wanted = set(field_names)
+    focused = {k: v for k, v in field_union.items() if k in wanted}
+
+    sorted_fields = sorted(focused.items())
+    lines: list[str] = ["{"]
+    for i, (field_name, field_schema) in enumerate(sorted_fields):
+        annotation = _summarize_field_schema(field_schema)
+        comma = "," if i < len(sorted_fields) - 1 else ""
+        # Note: schema body still shows the field-name vocabulary; the prompt
+        # header above tells Sonnet to wrap each value in {value, source_span}.
+        lines.append(f'  "{field_name}": null{comma}  // {annotation}')
+    lines.append("}")
+    schema_body = "\n".join(lines)
+
+    return _CITATION_PROMPT_HEADER + schema_body + "\n"
+
+
 def regenerate_extractor_prompt(
     dump_path: Path | str,
     output_path: Path | str,

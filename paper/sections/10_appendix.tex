@@ -170,13 +170,284 @@ will dispatch without it.}, label={lst:bmi_schema}, language=]
 
 \input{figures/loop_trace.tex}
 
-\Cref{fig:loop_trace} walks through one real exemplar. Under upfront
-B$'$+E, the extractor populated a value for \texttt{sex} that the BMI
-calculator did not request; the model's tool call used a different
-serialization (\texttt{sex=1} vs the extracted \texttt{sex=`female'}),
-triggering an unresolvable type-mismatch loop that exhausted the turn
-budget. Under reactive extraction the focused prompt for the BMI
-calculator did not ask the extractor about \texttt{sex} at all, so no
-flag fired and the calculator dispatched cleanly. This is one of 67
-vignettes following the recover-by-reactive pattern in our run
-(\cref{fig:trajectory_flow}).
+\Cref{fig:loop_trace} walks through one real exemplar from the pilot
+diagnostic runs described in \cref{sec:methods_pilots}. Under the
+un-gated upfront B$'$+E pilot, the extractor populated a value for
+\texttt{sex} that the BMI calculator did not request; the model's
+tool call used a different serialization (\texttt{sex=1} vs the
+extracted \texttt{sex=`female'}), triggering an unresolvable
+type-mismatch loop that exhausted the turn budget. Under
+schema-gated comparison (\cref{sec:methods_verifier}) this class of
+flag is suppressed by construction: \texttt{sex} is not declared as
+required by the BMI calculator's JSON Schema
+(\cref{lst:bmi_schema}), so the verifier skips the field and the
+calculator dispatches cleanly.
+
+\subsection{Implementation Methodology}
+\label{app:implementation}
+
+This appendix describes how the pieces of the verification stack fit
+together at a methodology level. It is not a code reference; the
+canonical implementation lives in the harness repository under
+\verb|harness/|.
+
+\subsubsection{Three Orthogonal Axes}
+
+Every extractor pipeline in the primary study is a point in a
+three-axis configuration space:
+
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item \textbf{Extraction placement.} \emph{Upfront} runs one
+        full-schema Sonnet call before the model begins generation;
+        \emph{reactive} runs one scoped Sonnet call at each
+        \toolname{medical\_calculator\_output} tool-call interception.
+  \item \textbf{Output format.} \emph{Bare} returns
+        \texttt{\{field: value\}}; \emph{citation} returns
+        \texttt{\{field: \{value, source\_span\}\}} where
+        \texttt{source\_span} must be a verbatim substring of the
+        vignette text.
+  \item \textbf{Sampling.} \emph{Single} dispatches one Sonnet call;
+        \emph{k-shot} dispatches $k=3$ independent calls at
+        temperature $0.7$ and reduces per-field by majority vote.
+\end{enumerate}
+
+The four primary study conditions are four points in this space; no
+condition mixes two non-default values on different axes. This
+preserves orthogonality for the pairwise contrasts in
+\cref{sec:methods_stats}.
+
+\subsubsection{Components}
+
+Five components participate in every primary study condition; their
+behavior is identical across conditions except where noted.
+
+\textbf{Primary model.} Qwen3-30B-A3B-Thinking-2507 served by vLLM
+on the H100. Receives the case vignette plus a confinement
+instruction, emits a stream of generation that may contain one or
+more \verb|<tool_call>| blocks before the final JSON answer.
+Identical configuration across all conditions.
+
+\textbf{Tool-call loop driver.} Intercepts generation at
+\verb|</tool_call>| stop tokens, dispatches the call to the verifier
+(in extractor-enabled conditions) or directly to MCP (in A/B/B$'$),
+splices the tool's structured response back into the prompt, and
+resumes generation. Identical across all conditions; the only
+inter-condition difference is whether the call passes through the
+verifier.
+
+\textbf{Extractor.} Claude Sonnet 4.6 with a system prompt header
+(\cref{lst:prompt_extractor_header}) and a schema body. The schema
+body differs across pipelines: the upfront pipeline uses the union
+of all calculator schemas; reactive pipelines use the subset of
+fields the active calculator declares. The citation variant
+additionally requires a \texttt{source\_span} per populated field;
+the k-shot variant dispatches three samples in parallel at
+temperature $0.7$ and votes per field. The extractor is blind to the
+model's proposed tool-call values --- it sees only the case text
+and (in reactive variants) the names of the fields the active
+calculator requests.
+
+\textbf{Verifier.} A deterministic comparator with three filters
+applied in order: (1) the \emph{schema gate} restricts comparison
+to fields the active calculator declares as required;
+(2) the \emph{abstention gate} skips fields the extractor returned as
+null; (3) the \emph{deterministic comparator} applies exact-match,
+numeric-tolerance, or canonical-form rules and flags on mismatch.
+On flag, the verifier injects the query-style intervention prompt
+(\cref{app:feedback_template}) into the model's prompt and the
+loop driver suppresses the MCP dispatch for that turn. The
+re-prompt counter is incremented; when it reaches the cap in
+\cref{tab:prereg_params}, subsequent flags are demoted to warnings
+and the MCP call is allowed through.
+
+\textbf{Validator (citation variant only).} A post-extraction filter
+that verifies each \texttt{source\_span} is a byte-identical
+substring of the vignette text. Validation failures coerce the field
+to null, which the verifier's abstention gate then skips.
+
+\subsubsection{Per-Condition Adapter Behavior}
+
+\Cref{tab:adapter_behavior} summarizes the adapter behavior for each
+primary study condition. ``Adapter'' here refers to the boundary
+between the loop driver and the extractor/verifier; the loop driver
+itself is identical across all conditions.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Adapter behavior per primary study condition. Loop driver,
+  primary model, MCP transport, and verifier comparison logic are
+  byte-identical across all four; differences live entirely in the
+  extractor pipeline.}
+  \label{tab:adapter_behavior}
+  \begin{tabular}{lp{3.5cm}p{3cm}p{3cm}}
+    \toprule
+    Condition & Extractor trigger & Sonnet calls per vignette & Per-field aggregation \\
+    \midrule
+    B$'$+E (upfront) &
+      once, before first tool call &
+      $1$ (full schema) &
+      identity \\
+    B$'$+E (reactive) &
+      at each \toolname{\_output} call &
+      $\sim$3--4 (scoped) &
+      identity \\
+    B$'$+E (reactive + citations) &
+      at each \toolname{\_output} call &
+      $\sim$3--4 (scoped, with citations) &
+      span-validate; coerce to null on failure \\
+    B$'$+E (reactive + k-shot) &
+      at each \toolname{\_output} call &
+      $\sim$3--4 $\times$ $k{=}3$ (scoped) &
+      majority of 3; no-majority $\to$ null \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{Pilot-Batch Sanity Checks}
+
+The five pre-run sanity checks from \cref{sec:methods_prereg} target
+the implementation invariants that would silently invalidate
+comparisons if violated:
+
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item \textbf{k-shot sample divergence.} For the k-shot condition,
+        pull the three Sonnet responses on a small sample of vignettes
+        and confirm they differ string-wise. Failure indicates prompt
+        caching or zero-temperature sampling is collapsing samples.
+  \item \textbf{Qwen3 input parity across conditions.} Hash the
+        prompt assembled for the primary model on a fixed vignette
+        under conditions B and B$'$. The system-prompt differs by
+        design; the case-text portion must be bit-identical. Failure
+        indicates preprocessing drift.
+  \item \textbf{Re-prompt cap enforcement.} Construct a vignette that
+        repeatedly triggers a verifier flag and confirm the loop
+        halts at the cap rather than looping indefinitely.
+  \item \textbf{Abstention firing.} On a vignette with deliberately
+        absent information, confirm the extractor returns
+        \texttt{null} for the absent field rather than fabricating
+        a value.
+  \item \textbf{Citation validator rejection.} Inject a paraphrased
+        \texttt{source\_span} (e.g., normalized units) and confirm
+        the validator rejects it, coercing the field to null.
+\end{enumerate}
+
+These checks are run on a 30-vignette pilot batch and must pass
+before the full $N=1066$ run commences.
+
+\subsection{Metadata and Logging}
+\label{app:logging}
+
+All conditions produce a uniform per-vignette log structure so that
+downstream analysis (accuracy, McNemar contrasts, flag composition,
+cost decomposition) can be run identically against any condition's
+output.
+
+\subsubsection{Per-Run Manifest}
+
+Each condition's run produces a single manifest JSON capturing:
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{Identity.} Condition ID, condition group
+        (anchor / primary / exploratory), pre-registration config
+        hash.
+  \item \textbf{Model snapshots.} Qwen3 weights hash, vLLM version,
+        Sonnet snapshot identifier, MCP backend version.
+  \item \textbf{Sampling configuration.} Qwen3 temperature, top-$p$,
+        max-tokens; Sonnet extraction temperature, $k$ samples per
+        field, seed strategy.
+  \item \textbf{Hygiene flags.} Schema-gating enabled (true/false),
+        intervention style (\texttt{query} / \texttt{correction}),
+        abstention mechanism (\texttt{prompt-only}).
+  \item \textbf{Apparatus.} Hardware (H100 instance type), Databricks
+        runtime, worker count, start/end timestamps.
+  \item \textbf{Apparatus-gate result.} Sonnet-on-B replication
+        accuracy and pass/fail (recorded for the gate run only, with
+        a back-reference from each downstream condition's manifest).
+\end{itemize}
+
+The manifest is written before the first vignette is dispatched and
+finalized at run end; the pre-registration config hash is verified
+to match the locked config on disk.
+
+\subsubsection{Per-Vignette Log Record}
+
+Each vignette in each condition produces one JSON record. The schema
+is identical across conditions; fields that do not apply to a
+condition (e.g., extractor fields under condition A) are omitted, not
+filled with null.
+
+\begin{itemize}\setlength\itemsep{2pt}
+  \item \textbf{Identity.} Vignette ID, condition ID, run ID.
+  \item \textbf{Input.} Case text hash, confinement instruction hash,
+        target calculator, expected value, tolerance.
+  \item \textbf{Extractor calls} (extractor-enabled conditions only).
+        Ordered list, one entry per Sonnet dispatch:
+        \begin{itemize}
+          \item Trigger point (\texttt{upfront} or the
+                \toolname{\_output} call index).
+          \item Scope: list of field names the call was prompted for.
+          \item Sample index (for k-shot: $0, 1, 2$; otherwise $0$).
+          \item Sonnet input tokens, output tokens, latency.
+          \item Raw response (string).
+          \item Parsed fields: \texttt{\{field: value\}} or
+                \texttt{\{field: \{value, source\_span\}\}} per
+                output format.
+          \item Citation validation results (citation condition):
+                per-field pass/fail and the reason on fail.
+          \item k-shot aggregation (k-shot condition): per-field
+                votes and the majority outcome.
+        \end{itemize}
+  \item \textbf{Tool calls.} Ordered list, one entry per
+        \verb|<tool_call>| the primary model emitted:
+        \begin{itemize}
+          \item Turn index, calculator name, parsed input arguments.
+          \item Verifier decision (\texttt{pass} /
+                \texttt{flag} / \texttt{cap-reached}).
+          \item On flag: the disagreeing fields, the model's value,
+                the extractor's value, and the rendered intervention
+                prompt.
+          \item Dispatched (true/false); MCP response if dispatched.
+          \item Per-call wall-clock: extractor dispatch time (sum
+                across $k$ samples for k-shot), verifier comparison
+                time, MCP dispatch time. Enables decomposing
+                end-to-end latency into extractor vs. tool-call vs.
+                model-generation components.
+        \end{itemize}
+  \item \textbf{Re-prompt counter.} Final value of the per-vignette
+        re-prompt counter; flag indicating whether the cap was
+        reached.
+  \item \textbf{Final answer.} The model's terminal JSON response,
+        the parsed numerical prediction, the correctness verdict.
+  \item \textbf{Token accounting.} Per-vignette totals: Qwen3 input,
+        Qwen3 output, Sonnet input, Sonnet output.
+  \item \textbf{Wall-clock.} Per-vignette end-to-end elapsed seconds
+        (a scalar, not a pre-aggregated median --- the aggregation
+        into per-condition medians happens at analysis time).
+  \item \textbf{Completion status.} \texttt{ok}, \texttt{api-error},
+        \texttt{malformed-tool-call-exhausted},
+        \texttt{turn-budget-exhausted}. Dropped iff status $\ne$
+        \texttt{ok}, per \cref{tab:prereg_params}.
+\end{itemize}
+
+\subsubsection{Export Format}
+
+The per-vignette records are written as JSON Lines (\verb|.jsonl|),
+one file per condition, named
+\verb|<condition_id>__<run_id>.jsonl|. JSON Lines is chosen for
+streamability (large files load incrementally), for compatibility
+with \texttt{pandas.read\_json(lines=True)} during analysis, and
+because nested structures (extractor calls, tool calls) live
+naturally in JSON. A companion \verb|<condition_id>__<run_id>.manifest.json|
+captures the per-run metadata above. Both files are committed to the
+result bundle under \verb|results/<run_id>/| and referenced by hash
+from any figure or table that reports their contents.
+
+\subsubsection{Analysis Surface}
+
+The accuracy, flag-composition, and cost tables in the results
+section are produced by uniform reduction functions over the
+\verb|.jsonl| files. The same reduction function applied to two
+different conditions' files produces directly comparable outputs;
+no per-condition special-casing is permitted in analysis code. This
+property is the methodological reason for the schema-uniformity
+requirement above.
