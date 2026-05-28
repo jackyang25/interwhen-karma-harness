@@ -339,6 +339,18 @@ def _col_or_zero(df: pd.DataFrame, col: str) -> pd.Series:
     return pd.Series([0] * len(df), index=df.index)
 
 
+# Latency is read from the fixed-concurrency timing pass (02_run_all §9),
+# NOT from the full accuracy run. The full run uses a different worker count
+# per condition (16–128) for throughput, which makes its per-vignette
+# wall-clock incomparable across conditions. Tokens and accuracy are
+# load-independent and come from the full run.
+def _timing_df(cond: str):
+    """Per-condition fixed-concurrency latency rows, or None if the timing
+    pass has not been run for this condition."""
+    p = RESULTS_DIR / f"qwen3_condition_{cond}_timing" / "rows.parquet"
+    return pd.read_parquet(p) if p.exists() else None
+
+
 cost_rows = []
 for cond in PLOT_ORDER:
     if cond not in dfs:
@@ -350,13 +362,27 @@ for cond in PLOT_ORDER:
         continue
 
     # API-side (Anthropic billing): extractor (any B'+E variant) + verifier (D).
+    # Token counts are load-independent → taken from the full run.
     api_prompt     = _col_or_zero(df, "extractor_prompt_tokens")     + _col_or_zero(df, "verifier_prompt_tokens")
     api_completion = _col_or_zero(df, "extractor_completion_tokens") + _col_or_zero(df, "verifier_completion_tokens")
-    api_elapsed    = _col_or_zero(df, "extractor_elapsed_s")         + _col_or_zero(df, "verifier_elapsed_s")
     # On-GPU (vLLM): everything in `prompt_tokens` / `completion_tokens` not
     # accounted for by API-side.
     on_gpu_prompt     = _col_or_zero(df, "prompt_tokens")     - api_prompt
     on_gpu_completion = _col_or_zero(df, "completion_tokens") - api_completion
+
+    # Latency: from the fixed-concurrency timing pass only.
+    tdf = _timing_df(cond)
+    if tdf is not None and "elapsed_seconds" in tdf.columns:
+        median_latency_s   = float(tdf["elapsed_seconds"].median())
+        mean_api_elapsed_s = float((_col_or_zero(tdf, "extractor_elapsed_s")
+                                    + _col_or_zero(tdf, "verifier_elapsed_s")).mean())
+        latency_n          = int(len(tdf))
+    else:
+        # No timing pass on disk → do NOT fall back to the confounded full-run
+        # wall-clock. Report latency as unavailable so it cannot be misread.
+        median_latency_s   = None
+        mean_api_elapsed_s = None
+        latency_n          = 0
 
     cost_rows.append({
         "condition":                     cond,
@@ -364,11 +390,13 @@ for cond in PLOT_ORDER:
         "group":                         ALL_CONDITIONS[cond]["group"],
         "accuracy":                      df["correct"].mean(),
         "mean_total_tokens":             df["total_tokens"].mean() if "total_tokens" in df.columns else None,
-        "median_latency_s":              df["elapsed_seconds"].median(),
+        "median_latency_s":              median_latency_s,
+        "latency_source":                "fixed-concurrency timing pass (1 worker)" if latency_n else "MISSING — run 02 §9 latency pass",
+        "latency_n":                     latency_n,
         "mean_model_calls":              df["n_model_calls"].mean() if "n_model_calls" in df.columns else None,
         "mean_api_prompt_tokens":        float(api_prompt.mean()),
         "mean_api_completion_tokens":    float(api_completion.mean()),
-        "mean_api_elapsed_s":            float(api_elapsed.mean()),
+        "mean_api_elapsed_s":            mean_api_elapsed_s,
         "mean_on_gpu_prompt_tokens":     float(on_gpu_prompt.mean()),
         "mean_on_gpu_completion_tokens": float(on_gpu_completion.mean()),
     })
@@ -823,6 +851,14 @@ for cond in PLOT_ORDER:
         continue
     dfs[cond].to_csv(raw_dir / f"condition_{cond}.csv", index=False)
     print(f"  condition_{cond}.csv  ({len(dfs[cond])} rows, {dfs[cond].shape[1]} cols)")
+
+# Fixed-concurrency latency-pass rows (source of all latency numbers).
+for cond in PLOT_ORDER:
+    tdf = _timing_df(cond)
+    if tdf is None:
+        continue
+    tdf.to_csv(raw_dir / f"condition_{cond}_timing.csv", index=False)
+    print(f"  condition_{cond}_timing.csv  ({len(tdf)} rows, single-worker latency pass)")
 
 # COMMAND ----------
 

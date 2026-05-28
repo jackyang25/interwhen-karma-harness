@@ -126,9 +126,10 @@ We use an external LLM of a different model family than the primary
 to produce the reference (specific model, version, and serving
 configuration in \cref{sec:methods_benchmark}). The cost of this
 design is that the extractor is itself an LLM, with its own
-distribution of errors. This paper's main finding is that those
-errors --- not the verifier mechanism --- bound the achievable
-accuracy.
+distribution of errors. Our central hypothesis
+(\cref{sec:intro_hypothesis}) is that those errors --- not the verifier
+mechanism --- are the binding constraint on achievable accuracy in this
+setting; whether the data bear that out is what the study tests.
 
 \subsection{Which Failure Classes Input Verification Can Reach}
 \label{sec:bg_scope}

@@ -88,8 +88,7 @@ and output format fixed.
   \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
     Top-10 flagged fields under each primary study condition.
     Compare against the pilot un-gated upfront diagnostic
-    (\cref{sec:methods_pilots}), which showed 32.3\% of flags on
-    \texttt{sex} alone and 58.6\% on non-required fields.}}
+    (\cref{sec:methods_pilots}).}}
   \caption{Top-10 flagged fields under each primary study extractor
   pipeline.}
   \label{fig:flag_composition}
@@ -128,9 +127,14 @@ tools.
 
 \begin{table}[!htbp]
   \centering
-  \caption{Total tokens per vignette and median wall-clock latency by
-  condition. ``API'' tokens are Sonnet calls (extractor + post-hoc
-  verifier in D). ``On-GPU'' tokens are Qwen3 via vLLM.}
+  \caption{Per-vignette tokens (from the full $N=1066$ run) and median
+  single-request latency (from a fixed-concurrency timing pass at one
+  worker, $N=50$). ``API'' tokens are Sonnet calls (extractor + post-hoc
+  verifier in D); ``On-GPU'' tokens are Qwen3 via vLLM. Tokens are
+  load-independent; latency is reported only from the fixed-concurrency
+  pass because the full run uses a different worker count per condition
+  (\cref{sec:methods_compute}) and its wall-clock is therefore not
+  comparable across conditions.}
   \label{tab:cost}
   \begin{tabular}{lrrr}
     \toprule
@@ -149,13 +153,16 @@ tools.
   \end{tabular}
 \end{table}
 
-\textbf{[TBD]} Compare per-vignette token cost and median wall-clock
+\textbf{[TBD]} Compare per-vignette token cost and single-request
 latency across the four extractor pipelines. Expected ordering on
 total tokens: reactive $<$ reactive+citations $<$ reactive+k-shot
 $<$ upfront (the upfront $\sim$50K-token call dominates everything
 the reactive variants do). Expected ordering on latency: reactive
-$\approx$ upfront $<$ reactive+k-shot (k-shot serializes weakly even
-with parallelism).
+$\approx$ upfront $<$ reactive+k-shot, because k-shot dispatches its
+three samples sequentially ($\sim$$3\times$ the single-sample
+extraction latency, \cref{sec:methods_extractor_kshot}). Latency is
+measured at fixed single-worker concurrency so the comparison reflects
+single-request deployment time rather than batch contention.
 
 \begin{figure}[H]
   \centering

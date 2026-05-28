@@ -1789,6 +1789,82 @@ print("\nNext: open 03_analysis and run all cells for the full analysis + export
 
 # COMMAND ----------
 
+# MAGIC %md ## 9. Latency pass (deployment proxy)
+# MAGIC
+# MAGIC The accuracy run above uses a different `WORKERS[cond]` per condition
+# MAGIC (16–128) to maximize throughput — correct for getting results fast, but
+# MAGIC it makes per-vignette wall-clock incomparable across conditions
+# MAGIC (different GPU/API contention per condition). Accuracy and token counts
+# MAGIC are load-independent, so we keep the fast run for those.
+# MAGIC
+# MAGIC Latency, however, must be measured at a **single fixed concurrency** to
+# MAGIC be a consistent, deployment-realistic "how long does one request take"
+# MAGIC number. This pass re-runs a small subset at `max_workers=1` (one request
+# MAGIC at a time, the single-user latency a deployment would see) across all
+# MAGIC conditions. Output goes to a separate `..._timing` dir and does NOT touch
+# MAGIC the accuracy run. 03_analysis reads latency from here, not from the full
+# MAGIC run.
+
+# COMMAND ----------
+
+# DBTITLE 1,Latency pass — fixed concurrency, small N
+TIMING_N       = 50   # subset size; median over 50 single-request samples is stable
+TIMING_WORKERS = 1    # one request at a time → single-user deployment latency
+
+_ELAPSED_COLS = [
+    "elapsed_seconds",      # end-to-end per request (the headline latency number)
+    "qwen3_elapsed_s",      # tool-calling loop wall-clock (incl. inline extractor/verifier)
+    "extractor_elapsed_s",  # Sonnet extraction time (B'+E variants; sequential sum for k-shot)
+    "verifier_elapsed_s",   # post-hoc Sonnet verifier time (D only)
+    "primary_elapsed_s",    # primary-model time under post-hoc verifier (D only)
+]
+
+
+def _mean_or_none(df, col):
+    return float(df[col].mean()) if col in df.columns else None
+
+
+timing_records: list[dict] = []
+for cond in CONDITIONS_TO_RUN:
+    print(f"[{cond}] LATENCY PASS (n={TIMING_N}, workers={TIMING_WORKERS})")
+    try:
+        adapter = _build_adapter(cond)
+        system = _system_for(cond)
+        res = run_eval(
+            adapter, n=TIMING_N, max_workers=TIMING_WORKERS,
+            system=system,
+            out_dir=str(_out_dir(cond, "timing")),
+        )
+        rec = {
+            "condition":               cond,
+            "label":                   ALL_CONDITIONS[cond]["label"],
+            "n":                       res.n,
+            "workers":                 TIMING_WORKERS,
+            "median_latency_s":        float(res.rows["elapsed_seconds"].median()),
+            **{f"mean_{c}": _mean_or_none(res.rows, c) for c in _ELAPSED_COLS},
+            "status":                  "ok",
+        }
+        print(f"[{cond}] median single-request latency = {rec['median_latency_s']:.2f} s")
+    except Exception as e:
+        rec = {"condition": cond, "status": "error", "error": f"{type(e).__name__}: {e}"}
+        print(f"[{cond}] LATENCY PASS ERROR: {rec['error']}")
+    timing_records.append(rec)
+    (RESULTS_ROOT / "_timing_progress.json").write_text(
+        json.dumps(timing_records, indent=2, default=str)
+    )
+
+timing_path = RESULTS_ROOT / "_TIMING_RESULTS.json"
+timing_path.write_text(json.dumps(
+    {"records": timing_records, "timing_n": TIMING_N,
+     "timing_workers": TIMING_WORKERS, "completed_at": time.time()},
+    indent=2, default=str,
+))
+print(f"\nLatency pass written to: {timing_path}")
+print("Latency is comparable across conditions because all rows here were "
+      f"measured at a fixed {TIMING_WORKERS}-worker concurrency.")
+
+# COMMAND ----------
+
 # MAGIC %md ## 9. Cleanup
 
 # COMMAND ----------

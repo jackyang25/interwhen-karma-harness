@@ -17,11 +17,9 @@ after the rerun: (1) whether best-practice verifier-guided extraction
 moved accuracy above B$'$; (2) which architectural axis carried the
 effect, if any; (3) the resulting deployment guidance.
 
-Two design choices in the primary study were motivated by pilot
-diagnostics that showed un-gated upfront extraction produced 58.6\%
-of its flags on fields the active calculator did not require, and
-32\% of all flags on a single field (sex). The schema-gated
-verifier and query-style intervention used throughout the primary
-study address both pathologies by construction; the rerun
-quantifies the residual gap, if any, between the best-practice
-extractor and the no-verifier forced-tool baseline.
+Two design choices in the primary study --- the schema-gated verifier
+and the query-style intervention --- were motivated by pilot
+diagnostics (\cref{sec:methods_pilots}) and address by construction two
+failure modes those pilots exposed. The rerun quantifies the residual
+gap, if any, between the best-practice extractor and the no-verifier
+forced-tool baseline.

@@ -42,10 +42,7 @@ pre-registered significance level; (2) which architectural axis
 (placement, format, sampling) carries the effect, if any;
 (3) cost-accuracy tradeoffs across the four pipelines.
 
-Two pilot diagnostics motivated the best-practice configuration:
-under un-gated upfront extraction, 58.6\% of verifier flags fired on
-fields the active calculator did not declare as required, and a
-single field (sex) accounted for 32\% of all flags. The schema gate
-suppresses this class of flag by construction; the query-style
-intervention removes the verifier's assertion of model error,
-allowing the model to adjudicate against the vignette text.
+The best-practice configuration was motivated by pilot diagnostics
+reported in \cref{sec:methods_pilots}; the schema gate and query-style
+intervention address, by construction, two failure modes those pilots
+exposed.

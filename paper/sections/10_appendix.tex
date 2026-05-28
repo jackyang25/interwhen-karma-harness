@@ -7,10 +7,12 @@
 \subsection{System Prompts}
 \label{app:system_prompts}
 
-The system prompts below differentiate conditions B$'$, C, and D. Conditions
-A, B, and E use no system prompt (the dataset's per-row
-\emph{confinement instruction}, described in \cref{sec:methods_benchmark},
-is the only prompt suffix appended).
+The system prompts below differentiate conditions B$'$, C, and D. The
+four primary study conditions (the B$'$+E pipelines) all use the
+B$'$ prompt (\cref{lst:prompt_bprime}). Conditions A and B use no
+system prompt (the dataset's per-row \emph{confinement instruction},
+described in \cref{sec:methods_benchmark}, is the only prompt suffix
+appended).
 
 \begin{lstlisting}[caption={Condition B$'$ --- force tool use. Verbatim
 from \toolname{prompts/condition\_b\_prime.txt}.},
@@ -75,8 +77,9 @@ consistent=true.
 \subsection{Fact Extractor Prompt}
 \label{app:extractor_prompt}
 
-The fact extractor used in E, B$'$+E, and B$'$+E (reactive) runs Sonnet
-with the system prompt shown in \cref{lst:prompt_extractor_header},
+The fact extractor used in all four primary study (B$'$+E) conditions
+runs Sonnet with the system prompt shown in
+\cref{lst:prompt_extractor_header},
 followed by a schema body that is generated deterministically from the
 MCP per-calculator JSON Schemas. For the upfront variant the body is
 the full union of all calculator fields ($\sim$500 entries); for the
@@ -116,17 +119,44 @@ Schema (allowed field names with type/range/enum constraints):
 { ...generated schema body... }
 \end{lstlisting}
 
-\subsection{Verifier Feedback Template (Condition E)}
+\subsection{Verifier Feedback Templates}
 \label{app:feedback_template}
 
-The verifier's flag injects the following template into the primary
+On a flag, the verifier injects a feedback template into the primary
 model's prompt. The \toolname{\{violations\}} placeholder expands to a
-list of disagreeing fields, each annotated with the planned value, the
-extracted value, and a short diagnostic note.
+list of disagreeing fields, each annotated with the field name, the
+model's planned value, and the extractor's value. The primary study
+uses the \emph{query-style} template
+(\cref{lst:feedback_query}); the \emph{correction-style} template
+(\cref{lst:feedback_correction}) was used only in the pilot
+diagnostics (\cref{sec:methods_pilots}) and is reproduced here for
+contrast.
 
-\begin{lstlisting}[caption={Verifier feedback prompt, verbatim from
+\begin{lstlisting}[caption={Query-style intervention template used in
+all primary study conditions. Verbatim from
+\toolname{prompts/condition\_e\_feedback\_query.txt}. Per
+\cref{sec:methods_prereg}, it presents the disagreement as a question
+to be resolved against the vignette, without asserting that either side
+is correct.}, label={lst:feedback_query}, language=]
+A second reading of the patient case (by an independent extractor)
+disagrees with one or more of the input values you planned to pass to
+this tool call:
+
+{violations}
+
+Please re-read the case carefully and determine, for each disagreeing
+field, which value the vignette actually supports. If the case clearly
+supports your original value, keep it. If the case clearly supports the
+extractor's value, use that. If the case does not clearly specify the
+field, return that field's value as null and explain your reasoning.
+
+Then call the tool again with the values the case supports.
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Correction-style template (pilot only,
+not used in the primary study). Verbatim from
 \toolname{prompts/condition\_e\_feedback.txt}.},
-label={lst:feedback}, language=]
+label={lst:feedback_correction}, language=]
 Your planned tool call has an input that does not match the patient case:
 
 {violations}

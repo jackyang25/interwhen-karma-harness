@@ -61,6 +61,15 @@ Anthropic's public API; no model weights other than Qwen3 run locally.
 Per-condition GPU-hours and estimated cloud costs are recorded in
 each result bundle's provenance file.
 
+Because the worker count varies across conditions, per-vignette
+wall-clock from the accuracy run is not comparable across conditions
+(contention differs by load). Accuracy and token counts are
+load-independent and are taken from the full run; \emph{latency} is
+measured separately in a fixed-concurrency pass that re-runs a
+$50$-vignette subset of every condition at a single worker, yielding
+a consistent single-request (deployment-style) latency. All latency
+numbers in \cref{sec:results_cost} come from that pass.
+
 \subsection{Conditions: Design and Purpose}
 \label{sec:methods_conditions}
 
@@ -426,10 +435,10 @@ is dispatched $k=3$ times with three independent seeds and identical
 prompt at temperature $0.7$. Samples are reduced per field by
 majority vote: a value present in $\ge 2$ of $3$ samples wins;
 three-way disagreement yields null (abstention). The three samples
-are dispatched in parallel where API rate limits permit, so the
-$k$-shot variant's latency is bounded by the single-sample latency
-plus serialization overhead, not by $3\times$ the single-sample
-latency.
+are dispatched sequentially, so the per-call extraction latency of
+this pipeline is approximately $3\times$ that of the single-sample
+reactive pipeline; the cost--latency reporting
+(\cref{sec:results_cost}) reflects this.
 
 The only architectural differences across the four pipelines are
 \emph{when} extraction happens, \emph{what} the extractor returns,
@@ -478,10 +487,11 @@ the primary family and are not Bonferroni-corrected.
 Before accepting primary results, we replicated Sonnet on Condition
 B and required the resulting accuracy to fall within
 $[0.789, 0.849]$ --- $\pm 3$ pp of EkaCare's published 81.9\%
-reference for Sonnet on the medical\_calculator\_eval benchmark,
-reported in the KARMA framework release~\citep{karma2024}. The gate
-was specified in advance (see \verb|TESTING.md| in the harness
-repository) and is not adjustable post-hoc. Its purpose is drift
+reference for Claude Sonnet 4.6 with tool access on
+medical\_calculator\_eval~\citep{ekacare_error_analysis}. The gate
+threshold was specified in advance in the locked pre-registration
+config (recorded in each result bundle's manifest, \cref{app:logging})
+and is not adjustable post-hoc. Its purpose is drift
 detection on the harness, dataset, prompt rendering, and MCP
 transport. It is not a validation of the primary Qwen3 results ---
 we assume the harness behaves identically for the primary model
