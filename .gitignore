@@ -30,6 +30,17 @@ cache.db
 # OS
 .DS_Store
 
+# LaTeX build artifacts (Tectonic / latexmk) — PDF is intentionally tracked
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
 # Editor
 .vscode/
 .idea/

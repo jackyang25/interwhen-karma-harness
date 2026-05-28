@@ -1865,7 +1865,7 @@ print("Latency is comparable across conditions because all rows here were "
 
 # COMMAND ----------
 
-# MAGIC %md ## 9. Cleanup
+# MAGIC %md ## 10. Cleanup
 
 # COMMAND ----------
 
