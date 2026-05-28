@@ -666,7 +666,7 @@ def _build_verified_adapter():
             f"MCP schema dump not found at {SCHEMA_DUMP_PATH}. "
             f"The preflight (§4.5) must run before any primary study condition."
         )
-    schema_dump_local = _vj.loads(SCHEMA_DUMP_PATH.read_text())
+    schema_dump = _vj.loads(SCHEMA_DUMP_PATH.read_text())
 
     class _VerifiedAdapter:
         """Qwen3 completions loop with per-tool-call semantic verification."""
@@ -756,7 +756,7 @@ def _build_verified_adapter():
                     event_info["violations"] = _schema_gate_violations(
                         event_info["violations"],
                         event_info.get("call_obj"),
-                        schema_dump_local,
+                        schema_dump,
                     )
 
                 # Pre-registered: re-prompt cap (PREREG_CONFIG["verifier_reprompt_cap"]).
@@ -1503,8 +1503,8 @@ def _build_adapter(cond: str):
       - post-hoc       (D)                       → PostHocVerifierAdapter
       - verified       (B_prime_E)               → _VerifiedAdapter (upfront extraction)
       - reactive       (B_prime_E_reactive)      → _ReactiveVerifiedAdapter
-      - reactive+cit   (..._reactive_citations)  → _CitationReactiveAdapter (stub)
-      - reactive+k     (..._reactive_kshot)      → _KShotReactiveAdapter (stub)
+      - reactive+cit   (..._reactive_citations)  → _CitationReactiveAdapter
+      - reactive+k     (..._reactive_kshot)      → _KShotReactiveAdapter
 
     All extractor-using conditions (B_prime_E and variants) share pre-registered
     hygiene: query intervention, schema-gating, prompt-only abstention. See
@@ -1678,8 +1678,10 @@ for _cond in _SMOKE_CONDS:
     print("=" * 60)
     try:
         _adapter = _build_adapter(_cond)
-    except NotImplementedError as _e:
-        print(f"  SKIP: {_cond} adapter not yet implemented:\n    {_e}")
+    except Exception as _e:
+        # Defensive: surface a build-time failure (e.g. missing schema dump /
+        # extractor prompt) without aborting the other smoke tests.
+        print(f"  SKIP: {_cond} adapter failed to build:\n    {type(_e).__name__}: {_e}")
         continue
     _system = _system_for(_cond)
 
@@ -1695,7 +1697,7 @@ for _cond in _SMOKE_CONDS:
         print(f"  n_fixes_applied : {_m.n_fixes_applied}  (re-prompts; capped at {PREREG_CONFIG['verifier_reprompt_cap']})")
         print(f"  answer text     : {_resp.text[:120]}")
         has_response = "<tool_response>" in _resp.raw_completion
-        print(f"  tool_response in raw_completion: {has_response}  (✓ real dispatch if True)")
+        print(f"  tool_response in raw_completion: {has_response}  (real dispatch if True)")
         if _m.violations_history:
             print(f"  violations_history[0]: {_m.violations_history[0]}")
 
@@ -1791,13 +1793,13 @@ try:
     for _i, _t in enumerate(_raw_texts):
         print(f"    sample {_i}: {_t[:160]}")
     if _distinct == 1:
-        print("\n  ⚠️  All 5 samples identical on an ambiguous input.")
+        print("\n  WARNING: All 5 samples identical on an ambiguous input.")
         print("  Investigate before trusting k-shot: confirm temperature reaches")
         print("  the API and no cache_control is set. (Note: even ambiguous")
         print("  extraction can occasionally collapse — re-run this probe once")
         print("  before concluding it's a real caching problem.)")
     else:
-        print(f"\n  ✓ Sampling is stochastic ({_distinct} distinct outputs) — "
+        print(f"\n  OK: Sampling is stochastic ({_distinct} distinct outputs) — "
               f"temperature is taking effect, no caching collapse.")
 except Exception as _e:
     print(f"  probe skipped ({type(_e).__name__}: {_e})")
