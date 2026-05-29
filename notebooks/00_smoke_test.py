@@ -23,7 +23,7 @@
 # MAGIC %md
 # MAGIC `interwhen` is intentionally omitted here — it has `vllm` as a hard dep
 # MAGIC and won't install cleanly on CPU/Serverless. It gets installed in the
-# MAGIC GPU notebooks (Condition E onward) once we're on an H100.
+# MAGIC GPU notebooks (the tool-calling conditions) once we're on an H100.
 # MAGIC
 # MAGIC `karma-medeval` is similarly heavy (pulls torch, transformers); it's
 # MAGIC needed once we plug into KARMA's CLI but not for apparatus validation.

@@ -1,4 +1,4 @@
-"""Deterministic semantic verifier (Condition E).
+"""Deterministic semantic verifier (used by the B'+E conditions).
 
 Compares the clinical arguments of a `medical_calculator_output` tool call
 against `PatientFacts` extracted by Sonnet. Returns a list of `Violation`s
@@ -22,7 +22,7 @@ ambiguous — is silently passed.
 
 The split between LLM extraction (Sonnet) and deterministic comparison
 (this module) is the methodological defense against AI-verifying-AI
-circularity (TESTING.md §5).
+circularity (see paper §methods_verifier).
 """
 from __future__ import annotations
 

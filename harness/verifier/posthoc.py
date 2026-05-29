@@ -1,4 +1,4 @@
-"""Post-hoc verification (Condition D').
+"""Post-hoc verification (Condition D).
 
 After the primary model produces an answer, a separate verifier model (Sonnet
 4.6 — different from Qwen3 to avoid self-agreement bias) inspects the case +

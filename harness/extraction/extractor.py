@@ -1,4 +1,4 @@
-"""Sonnet-based fact extractor for Condition E.
+"""Sonnet-based fact extractor for the B'+E conditions.
 
 Reads a vignette, returns a structured patient JSON object. The schema is
 generated at run time by the preflight cell in `notebooks/02_run_all.py`
@@ -11,7 +11,7 @@ so the verifier isn't comparing the model against itself.
 The output is consumed by `harness.verifier.semantic` to check tool-call
 inputs against the case before they are dispatched.
 
-§8 of TESTING.md requires the extractor to demonstrate ≥95% field-level
+The paper recommends the extractor demonstrate ≥95% field-level
 accuracy on a hand-annotated held-out set before production runs. That gate
 is enforced operationally (manual review at pilot time), not in code — this
 module provides the runtime extractor; the validation set construction is a

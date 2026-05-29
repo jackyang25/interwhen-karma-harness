@@ -1,4 +1,4 @@
-"""Post-run statistical analysis (§7 of TESTING.md).
+"""Post-run statistical analysis (paper §methods_stats).
 
 Currently exposes the statistical primitives — Wilson CIs, McNemar's test, and
 Bonferroni correction. Error-type decomposition and verifier characterization

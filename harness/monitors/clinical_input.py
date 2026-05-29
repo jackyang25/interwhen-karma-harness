@@ -21,7 +21,7 @@ We provide the three abstract methods:
 
 The verifier itself is deterministic (no LLM); the fact extractor is an LLM
 call but is bounded to structured extraction. This split is the methodological
-defense against AI-verifying-AI circularity (TESTING.md §5).
+defense against AI-verifying-AI circularity (see paper §methods_verifier).
 """
 from __future__ import annotations
 

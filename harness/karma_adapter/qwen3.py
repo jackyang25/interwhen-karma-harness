@@ -2,10 +2,10 @@
 
 Why text-mode (and not chat-completions + structured tools)? Two reasons:
 
-1. **Single channel across conditions.** Condition E uses the inline
+1. **Single channel across conditions.** The B'+E conditions use the inline
    `_VerifiedAdapter` in `notebooks/02_run_all.py`, which watches the raw
    text stream for `<tool_call>` blocks and dispatches via the
-   ClinicalInputMonitor. Using a different endpoint for E than for
+   ClinicalInputMonitor. Using a different endpoint for them than for
    A/B/C/B'/D would mix channels and confound comparisons. All Qwen3
    conditions therefore go through `/v1/completions` text-mode.
 
@@ -24,7 +24,7 @@ Architecture (this file, used by A/B/C/B' and as the primary in D):
   `<tool_response>` block to the prompt, and continue generation from there.
 - Loop until the model produces output without a tool call.
 
-Condition E and B'+E use a separate adapter (inline in 02_run_all) that
+The B'+E conditions use a separate adapter (inline in 02_run_all) that
 inserts the ClinicalInputMonitor between detection and dispatch, but the
 underlying text-mode channel is identical.
 """

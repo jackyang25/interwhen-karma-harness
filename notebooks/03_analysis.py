@@ -17,8 +17,8 @@
 # MAGIC | 5 | B_prime_E_reactive | primary | Reactive per-call extractor + hygiene |
 # MAGIC | 6 | B_prime_E_reactive_citations | primary | Reactive + (value, source_span) |
 # MAGIC | 7 | B_prime_E_reactive_kshot | primary | Reactive + k=3 majority vote |
-# MAGIC | 8 | C | exploratory | Prompt-only self-verify (inherited) |
-# MAGIC | 9 | D | exploratory | Post-hoc Sonnet verifier (inherited) |
+# MAGIC | 8 | C | exploratory | Force-tool + prompt-only input self-verify (B' footing, no extractor) |
+# MAGIC | 9 | D | exploratory | Force-tool + post-hoc Sonnet output verifier (B' footing) |
 # MAGIC
 # MAGIC ## Pre-registered primary contrasts (Bonferroni n=6, α=0.00833)
 # MAGIC
@@ -32,7 +32,9 @@
 # MAGIC | 6 | B_prime_E_reactive_kshot vs B_prime_E_reactive | Does k-shot voting improve reactive? |
 # MAGIC
 # MAGIC Plus exploratory contrasts: B_prime_E (upfront) vs B_prime_E_reactive
-# MAGIC (placement); C vs B, D vs B (other verifier mechanisms).
+# MAGIC (placement); C vs B_prime (prompt self-check vs no-check, matched
+# MAGIC footing); B_prime_E_reactive vs C (external verifier vs prompt
+# MAGIC self-check); D vs B_prime (post-hoc output check, matched footing).
 
 # COMMAND ----------
 
@@ -234,8 +236,12 @@ print(f"\nFamily α = 0.05; n_tests = {BONFERRONI_N}; per-test α = {PRIMARY_ALP
 # DBTITLE 1,Exploratory contrasts
 EXPLORATORY_CONTRASTS = [
     ("B_prime_E_upfront_vs_reactive", "B_prime_E", "B_prime_E_reactive"),
-    ("C_vs_B",                        "C",         "B"),
-    ("D_vs_B",                        "D",         "B"),
+    # C now runs on the B' forced-tool footing, so it is compared against B'
+    # (matched baseline) and head-to-head against the best extractor arm.
+    ("C_vs_B_prime",                  "C",         "B_prime"),
+    ("B_prime_E_reactive_vs_C",       "B_prime_E_reactive", "C"),
+    # D now runs on the B' forced-tool footing, so it is compared against B'.
+    ("D_vs_B_prime",                  "D",         "B_prime"),
 ]
 
 exploratory_results: dict[str, dict] = {}
@@ -388,6 +394,7 @@ for cond in PLOT_ORDER:
         "condition":                     cond,
         "label":                         ALL_CONDITIONS[cond]["label"],
         "group":                         ALL_CONDITIONS[cond]["group"],
+        "status":                        "ok",
         "accuracy":                      df["correct"].mean(),
         "mean_total_tokens":             df["total_tokens"].mean() if "total_tokens" in df.columns else None,
         "median_latency_s":              median_latency_s,
@@ -462,7 +469,14 @@ plt.show()
 
 # DBTITLE 1,Pareto plot — accuracy vs total tokens
 fig_pareto, ax_p = plt.subplots(figsize=(8, 5))
-plot_df = cost_df[cost_df.get("status", "").fillna("").astype(str) != "missing"].dropna(subset=["accuracy", "mean_total_tokens"])
+# Robust to cost_df missing the status/accuracy columns entirely (e.g. when no
+# condition has instrumented data yet): default status to "ok" and skip the
+# plot cleanly rather than raising.
+if {"accuracy", "mean_total_tokens"}.issubset(cost_df.columns):
+    _status = cost_df.get("status", pd.Series("ok", index=cost_df.index)).fillna("").astype(str)
+    plot_df = cost_df[_status != "missing"].dropna(subset=["accuracy", "mean_total_tokens"])
+else:
+    plot_df = cost_df.iloc[0:0]
 for _, r in plot_df.iterrows():
     ax_p.scatter(r["mean_total_tokens"], r["accuracy"], s=80, c=_GROUP_COLOR.get(r["group"], "k"))
     ax_p.annotate(r["label"], (r["mean_total_tokens"], r["accuracy"]),
@@ -899,8 +913,11 @@ if mechanism_diagnostics:
         json.dumps(mechanism_diagnostics, indent=2, default=str)
     )
 
-# Per-row reconciliation: every primary condition against B_prime (its natural baseline).
-for cond in PRIMARY_CONDITIONS:
+# Per-row reconciliation against B_prime (the shared baseline). Covers the four
+# primary conditions AND the two redefined forced-tool comparators (C, D), which
+# now sit on the B_prime footing — so their per-row flips vs B_prime are captured
+# too, not silently dropped.
+for cond in PRIMARY_CONDITIONS + ["C", "D"]:
     if cond not in dfs or "B_prime" not in dfs:
         continue
     sub = dfs[cond].copy()

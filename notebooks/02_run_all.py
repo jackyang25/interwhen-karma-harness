@@ -18,8 +18,8 @@
 # MAGIC | 5 | B'+E (reactive) | primary | Reactive per-tool-call scoped extraction, same hygiene |
 # MAGIC | 6 | B'+E (reactive + citations) | primary | Reactive + (value, source_span) extraction; substring-validated |
 # MAGIC | 7 | B'+E (reactive + k-shot) | primary | Reactive + k=3 majority-vote extraction |
-# MAGIC | 8 | C | exploratory | Prompt-only self-verify — no extractor |
-# MAGIC | 9 | D | exploratory | Post-hoc Sonnet verifier — no extractor |
+# MAGIC | 8 | C | exploratory | Force-tool + prompt-only input self-verify (B' footing, no extractor) |
+# MAGIC | 9 | D | exploratory | Force-tool + post-hoc Sonnet output verifier (B' footing) |
 # MAGIC
 # MAGIC **Pre-registered hygiene (baked into all primary conditions 4-7):**
 # MAGIC - schema-gated verifier comparison (only fields the active calculator requires)
@@ -294,7 +294,7 @@ else:
     print(f"[preflight]   {len(dump_data['field_union'])} unique clinical field names")
 
 # Always regenerate the extractor prompt from the (now-current) dump.
-# The runtime prompt path is what FactExtractor reads (see _build_adapter('E')).
+# The runtime prompt path is what FactExtractor reads (see the B_prime_E adapters).
 meta = regenerate_extractor_prompt(SCHEMA_DUMP_PATH, RUNTIME_EXTRACTOR_PATH)
 print(f"[preflight] extractor prompt regenerated → {meta['output_path']}")
 print(f"[preflight]   {meta['n_fields']} fields, {meta['prompt_chars']} chars")
@@ -368,22 +368,23 @@ ALL_CONDITIONS: dict[str, dict] = {
         "description": "Reactive + k=3 majority-vote extraction",
     },
     "C": {
-        "group": "exploratory", "rerun": False,
-        "description": "Prompt-only self-verify — inherits existing results",
+        "group": "exploratory", "rerun": True,
+        "description": "Force-tool + prompt-only input self-verify (B' footing, no extractor)",
     },
     "D": {
-        "group": "exploratory", "rerun": False,
-        "description": "Post-hoc Sonnet verifier — inherits existing results",
+        "group": "exploratory", "rerun": True,
+        "description": "Force-tool + post-hoc Sonnet output verifier (B' footing)",
     },
 }
 
 # Convenience presets — pick one for CONDITIONS_TO_RUN.
 # ────────────────────────────────────────────────────────────────────────────
-RERUN_ALL_NEW    = [k for k, v in ALL_CONDITIONS.items() if v["rerun"]]                # 6 conditions
+RERUN_ALL_NEW    = [k for k, v in ALL_CONDITIONS.items() if v["rerun"]]                # 8 conditions (B, B_prime, 4x B_prime_E, C, D)
 RERUN_PRIMARY    = [k for k, v in ALL_CONDITIONS.items() if v["group"] == "primary"]   # 4 primary
 RERUN_ANCHORS    = [k for k, v in ALL_CONDITIONS.items() if v["group"] == "anchor" and v["rerun"]]  # B, B_prime
 RERUN_NEW_ARMS   = ["B_prime_E_reactive_citations", "B_prime_E_reactive_kshot"]        # the 2 new mechanism arms
-INHERIT_ONLY     = [k for k, v in ALL_CONDITIONS.items() if not v["rerun"]]            # A, C, D
+RERUN_C_AND_D    = ["C", "D"]                                                          # redefined forced-tool comparators
+INHERIT_ONLY     = [k for k, v in ALL_CONDITIONS.items() if not v["rerun"]]            # A only (capability floor)
 
 # COMMAND ----------
 
@@ -393,17 +394,22 @@ INHERIT_ONLY     = [k for k, v in ALL_CONDITIONS.items() if not v["rerun"]]     
 # Use one of the presets above or list condition IDs explicitly.
 #
 # Examples:
-#   CONDITIONS_TO_RUN = RERUN_ALL_NEW   # all 6 conditions needing fresh data (default)
+#   CONDITIONS_TO_RUN = ["C", "D"]      # targeted rerun: the two redefined comparators
+#   CONDITIONS_TO_RUN = RERUN_C_AND_D   # same, via preset
 #   CONDITIONS_TO_RUN = RERUN_PRIMARY   # the 4 primary study conditions
 #   CONDITIONS_TO_RUN = RERUN_ANCHORS   # just B and B_prime
-#   CONDITIONS_TO_RUN = RERUN_NEW_ARMS  # just the 2 new mechanism arms
-#                                       # (citations + k-shot)
-#   CONDITIONS_TO_RUN = ["B_prime_E"]   # a single condition
+#   CONDITIONS_TO_RUN = RERUN_NEW_ARMS  # just the 2 new mechanism arms (citations + k-shot)
+#   CONDITIONS_TO_RUN = RERUN_ALL_NEW   # WARNING: now 8 conditions (all rerun=True),
+#                                       # NOT the original 6 — would re-run B, B', and the
+#                                       # four B'+E arms too. Use only for a full from-scratch run.
 # ──────────────────────────────────────────────────────────────────────────────
-CONDITIONS_TO_RUN: list[str] = RERUN_ALL_NEW
+# Current run: only C and D were redefined (forced-tool footing). Set explicitly
+# so the six already-run conditions (B, B', and the four B'+E arms) are NOT touched.
+CONDITIONS_TO_RUN: list[str] = ["C", "D"]
 
-FORCE_RERUN   = True        # ignore existing summary.json; rerun selected conditions
-BACKUP_LEGACY = True        # move existing rows.parquet to _backup_<ts>/ before write
+FORCE_RERUN   = True        # required: C and D have OLD results on disk; this forces a
+                            # fresh run under their new definition (else they'd be skipped)
+BACKUP_LEGACY = True        # backs up the old C/D rows.parquet to _backup_<ts>/ before write
 
 # Validate selection up-front so a typo doesn't surface mid-overnight-run.
 _unknown = [c for c in CONDITIONS_TO_RUN if c not in ALL_CONDITIONS]
@@ -458,9 +464,9 @@ PREREG_CONFIG = {
 # used in the pilot runs). Lives at prompts/condition_e_feedback_query.txt.
 FEEDBACK_TEMPLATE_PATH = REPO_ROOT / "prompts/condition_e_feedback_query.txt"
 
-# Pilot-style template kept on disk for reproducibility of legacy E/B_prime_E
-# runs (the prior 8-condition study used this one). Not used by any primary
-# study condition — only by the documented pilot-diagnostic runs.
+# Correction-style template kept on disk only for reproducibility of the
+# documented pilot-diagnostic runs (paper §methods_pilots). NOT used by any
+# condition in the current study.
 FEEDBACK_TEMPLATE_PILOT_PATH = REPO_ROOT / "prompts/condition_e_feedback.txt"
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -479,16 +485,24 @@ FEEDBACK_TEMPLATE_PILOT_PATH = REPO_ROOT / "prompts/condition_e_feedback.txt"
 # because it triples the Sonnet call RATE per vignette.
 # If you see vLLM timeouts, lower the extractor-condition numbers back toward 32.
 # ──────────────────────────────────────────────────────────────────────────────
+# Uniform concurrency. Worker count affects wall-clock ONLY, not accuracy or
+# token counts (each vignette is independent; Qwen3 is deterministic at T=0,
+# and the Sonnet calls are per-vignette independent). Latency is reported from
+# a separate fixed-concurrency pass, so these values are tuned purely for
+# throughput. On the enterprise Anthropic plan the API rate limit is not the
+# binding constraint at 128 — the H100/vLLM throughput is. If you see vLLM
+# timeouts on the high-Sonnet-pressure arms (reactive, k-shot), lower those
+# back toward 64.
 WORKERS = {
     "A":                             128,
-    "B":                              64,
-    "B_prime":                        64,
-    "C":                              64,
-    "D":                              64,   # Sonnet post-hoc verifier (enterprise: rate limit not binding)
-    "B_prime_E":                      64,   # upfront full-schema Sonnet pressure
-    "B_prime_E_reactive":             64,   # reactive: ~3.6 Sonnet calls/vignette, sequential
-    "B_prime_E_reactive_citations":   64,   # same as reactive; citation validation is local
-    "B_prime_E_reactive_kshot":       64,   # k=3 is Sonnet-side only; Qwen3/H100 load == reactive at same workers
+    "B":                             128,
+    "B_prime":                       128,
+    "C":                             128,
+    "D":                             128,
+    "B_prime_E":                     128,
+    "B_prime_E_reactive":            128,
+    "B_prime_E_reactive_citations":  128,
+    "B_prime_E_reactive_kshot":      128,
 }
 
 PILOT_N = 10
@@ -508,7 +522,10 @@ def _system_for(cond: str) -> str | None:
         "B":                             None,
         "B_prime":                       PRIMARY_SYSTEM,
         "C":                             REPO_ROOT / "prompts/condition_c.txt",
-        "D":                             None,   # Sonnet verifier has its own prompt
+        # D now runs on the B' forced-tool footing (matched to B' and B'+E).
+        # The post-hoc Sonnet reviewer keeps its own prompt (condition_d.txt),
+        # loaded separately inside _build_posthoc_adapter().
+        "D":                             PRIMARY_SYSTEM,
         # All four primary study conditions share the locked B' system prompt.
         # The only inter-condition variation lives in the extractor pipeline.
         "B_prime_E":                     PRIMARY_SYSTEM,
@@ -603,15 +620,16 @@ def _build_posthoc_adapter():
 
 # COMMAND ----------
 
-# DBTITLE 1,_VerifiedAdapter builder (E, B_prime_E)
+# DBTITLE 1,_VerifiedAdapter builder (B_prime_E upfront)
 def _build_verified_adapter():
-    """E and B_prime_E: Qwen3 tool-calling loop with ClinicalInputMonitor intercept.
+    """B_prime_E (upfront): Qwen3 tool-calling loop with ClinicalInputMonitor
+    intercept and upfront full-schema extraction.
 
-    B_prime_E (exploratory) shares this exact adapter with E. The only
-    difference vs E is the system prompt (handled by _system_for, threaded
-    through run_eval → adapter.run(prompt, system=...)). Sharing the adapter
-    is the methodological point: we isolate the system-prompt effect on top
-    of the E mechanics, with no other code-path delta.
+    The system prompt (the B' force-tool prompt) is threaded in by _system_for
+    via run_eval → adapter.run(prompt, system=...), NOT by the adapter itself.
+    The reactive / citation / k-shot variants reuse these exact intercept
+    mechanics through their own builders, differing only in the extractor
+    pipeline.
 
     Architecture (mirrors Qwen3Adapter.run() exactly, adds one step):
       1. Call /v1/completions, stop at </tool_call>
@@ -1665,12 +1683,13 @@ from datasets import load_dataset as _lds
 
 _ds = _lds("ekacare/medical_calculator_eval", split="test")
 
-_SMOKE_CONDS = [
-    "B_prime_E",
-    "B_prime_E_reactive",
-    "B_prime_E_reactive_citations",
-    "B_prime_E_reactive_kshot",
-]
+# Smoke-test exactly the conditions this run will produce, with
+# condition-appropriate checks (see the per-vignette branch below).
+_SMOKE_CONDS = list(CONDITIONS_TO_RUN)
+_USES_MONITOR = {
+    "B_prime_E", "B_prime_E_reactive",
+    "B_prime_E_reactive_citations", "B_prime_E_reactive_kshot",
+}
 
 for _cond in _SMOKE_CONDS:
     print("\n" + "=" * 60)
@@ -1688,18 +1707,28 @@ for _cond in _SMOKE_CONDS:
     for i in range(3):
         _vignette = _ds[i]["question_text"]
         _resp = _adapter.run(_vignette, system=_system)
-        _m = _adapter._last_monitor.metrics
         print(f"\n--- vignette {i} ---")
-        print(f"  n_model_calls   : {_resp.n_model_calls}")
-        print(f"  n_tool_calls    : {_resp.n_tool_calls}   (MCP dispatches)")
-        print(f"  n_steps_seen    : {_m.n_steps_seen}    (tool_call blocks)")
-        print(f"  n_verifier_fires: {_m.n_verifier_fires} (post schema-gate)")
-        print(f"  n_fixes_applied : {_m.n_fixes_applied}  (re-prompts; capped at {PREREG_CONFIG['verifier_reprompt_cap']})")
+        print(f"  n_model_calls   : {getattr(_resp, 'n_model_calls', '?')}")
+        print(f"  n_tool_calls    : {_resp.n_tool_calls}   (MCP dispatches; >0 = forced footing OK)")
         print(f"  answer text     : {_resp.text[:120]}")
-        has_response = "<tool_response>" in _resp.raw_completion
-        print(f"  tool_response in raw_completion: {has_response}  (real dispatch if True)")
-        if _m.violations_history:
-            print(f"  violations_history[0]: {_m.violations_history[0]}")
+        if _cond in _USES_MONITOR:
+            # B'+E family: ClinicalInputMonitor exposes verifier metrics.
+            _m = _adapter._last_monitor.metrics
+            print(f"  n_steps_seen    : {_m.n_steps_seen}    (tool_call blocks)")
+            print(f"  n_verifier_fires: {_m.n_verifier_fires} (post schema-gate)")
+            print(f"  n_fixes_applied : {_m.n_fixes_applied}  (re-prompts; capped at {PREREG_CONFIG['verifier_reprompt_cap']})")
+            print(f"  tool_response in raw_completion: {'<tool_response>' in _resp.raw_completion}  (real dispatch if True)")
+            if _m.violations_history:
+                print(f"  violations_history[0]: {_m.violations_history[0]}")
+        elif _cond == "C":
+            # Plain forced-tool + self-check: no monitor, just confirm dispatch.
+            print(f"  tool_response in raw_completion: {'<tool_response>' in _resp.raw_completion}  (real dispatch if True)")
+        elif _cond == "D":
+            # Post-hoc Sonnet verifier: confirm it fired, parsed, and (maybe) revised.
+            print(f"  verifier_consistent   : {_resp.verifier_consistent}")
+            print(f"  verifier_issue        : {_resp.verifier_issue[:100]}")
+            print(f"  revised               : {_resp.revised}")
+            print(f"  verifier_prompt_tokens: {_resp.verifier_prompt_tokens}  (>0 confirms Sonnet verifier ran)")
 
     # ── Adapter-specific sanity checks ────────────────────────────────────
     if _cond == "B_prime_E_reactive_kshot":
@@ -1751,7 +1780,8 @@ for _cond in _SMOKE_CONDS:
         if n_total > 0 and n_valid == n_total:
             print("  NOTE: 100% citation validity — possible but worth eyeballing one report.")
 
-print("\nSmoke tests done. Verify: n_tool_calls > 0 and tool_response True on any vignette.")
+print("\nSmoke tests done. Verify: n_tool_calls > 0 on each condition (forced "
+      "footing), and for D that verifier_prompt_tokens > 0 (Sonnet verifier ran).")
 
 # ── Direct caching / temperature probe (authoritative) ────────────────────────
 # The per-vignette divergence diagnostic above can show 0% legitimately when
@@ -1764,6 +1794,10 @@ print("\n" + "=" * 60)
 print("=== direct caching/temperature probe (k=5 on an ambiguous input) ===")
 print("=" * 60)
 try:
+    # The extractor probe is meaningful only for the B'+E (extractor-using)
+    # family. On a C/D-only run there is no extractor, so skip cleanly.
+    if not (_USES_MONITOR & set(CONDITIONS_TO_RUN)):
+        raise RuntimeError("no extractor-using (B'+E) condition in this run — probe N/A")
     from harness.extraction import FactExtractor as _FE
     from harness.extraction.prompt_builder import render_focused_prompt as _rfp
     import json as _pj

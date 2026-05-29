@@ -1,4 +1,4 @@
-"""Fact extractor (Conditions E and B'+E).
+"""Fact extractor (B'+E conditions).
 
 LLM-based component that reads a clinical vignette and returns a flat JSON
 object of patient facts keyed by MCP calculator field names. The schema is
@@ -7,7 +7,7 @@ per-calculator input schemas (preflight cell in `notebooks/02_run_all.py`).
 
 Uses a different model from the one being evaluated (Sonnet 4.6 by default)
 to avoid AI-verifying-AI circularity. Validated against a hand-annotated
-held-out set operationally before production use — TESTING.md §8 sets ≥95%
+held-out set operationally before production use — the paper recommends ≥95%
 field-level accuracy as the gate; that check is a manual step, not enforced
 in code.
 """

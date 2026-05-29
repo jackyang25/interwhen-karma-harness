@@ -2,7 +2,7 @@
 
 Contains the full experimental apparatus — fact extractor, semantic verifier,
 interwhen-style monitor, KARMA-compatible model adapters, runner, and analysis.
-See TESTING.md for the experimental design this package implements.
+See the paper (Methods) for the experimental design this package implements.
 """
 
 # Apply upstream-KARMA patches on import so EKA_API_TOKEN works without a fork.

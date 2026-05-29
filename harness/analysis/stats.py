@@ -1,10 +1,10 @@
 """Statistical primitives for the apparatus-validation and condition comparisons.
 
 These functions don't depend on any condition's results — they're pure stats and
-can be unit-tested independently. They implement what §7 of TESTING.md requires:
-Wilson confidence intervals for per-condition accuracy, McNemar's test for
-paired same-question comparisons, and Bonferroni correction across the four
-confirmatory comparisons.
+can be unit-tested independently. They implement the paper's statistical
+analysis (§methods_stats): Wilson confidence intervals for per-condition
+accuracy, McNemar's test for paired same-question comparisons, and Bonferroni
+correction across the six confirmatory comparisons.
 """
 from __future__ import annotations
 

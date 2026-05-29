@@ -4,7 +4,7 @@
 # MAGIC
 # MAGIC Reproduce EkaCare's Claude Sonnet 4.6 + tools = **81.9%** on
 # MAGIC `medical_calculator_eval` (within ±3pp) through this harness. This is
-# MAGIC the gate before any experimental runs (§8 of TESTING.md).
+# MAGIC the gate before any experimental runs (paper §methods_gate).
 # MAGIC
 # MAGIC The notebook runs in two stages:
 # MAGIC 1. **Pilot (n=10)** — proves the wiring works end-to-end. Costs cents.

@@ -54,9 +54,13 @@ instance (one NVIDIA H100 80\,GB GPU), running on Databricks Runtime
 endpoint, not chat completions, so the custom tool-calling loop
 driver can intercept generation at \verb|</tool_call>| stop tokens.
 Per-condition runs are parallelized across vignettes via a process
-pool; the worker count ranges from 32 to 128 depending on per-vignette
-Sonnet pressure (higher pressure $\rightarrow$ lower concurrency to
-respect API rate limits). Sonnet calls are dispatched against
+pool. The worker count affects wall-clock only, not accuracy or token
+counts --- each vignette is processed independently and the primary
+model is deterministic at temperature zero --- so it is tuned for
+throughput and recorded per run in the result-bundle manifest
+(\cref{app:logging}). Reported latency comes from a separate
+fixed-concurrency timing pass (\cref{sec:results_cost}), not from these
+production runs. Sonnet calls are dispatched against
 Anthropic's public API; no model weights other than Qwen3 run locally.
 Per-condition GPU-hours and estimated cloud costs are recorded in
 each result bundle's provenance file.
@@ -149,20 +153,34 @@ in \cref{tab:conditions} and the contrast logic in
 \label{sec:methods_exploratory}
 
 Two conditions test verifier mechanisms outside the
-extractor--verifier architecture family. They are not in the primary
-contrast family and inherit their numbers from earlier pilot runs
-under fixed apparatus.
+extractor--verifier architecture family. Neither is in the primary
+contrast family.
 
-\textbf{C} (prompt-only self-verify) instructs the model in-prompt
-to verify each input value against the case before calling a tool
-(prompt in \cref{lst:prompt_c}). No external extractor, no separate
-verifier.
+\textbf{C} (force-tool + prompt-only input self-verify) is the
+in-prompt analog of the input verifier: it uses the same forced-tool
+footing as the primary study (the B$'$ system prompt) and additionally
+instructs the model to verify each input value against the case before
+calling a tool (merged prompt in \cref{lst:prompt_c}). No external
+extractor, no separate verifier --- the model checks its own inputs.
+Running C on the B$'$ footing (rather than on plain tools) makes it a
+matched comparator for the B$'$+E arms: the contrast
+B$'$+E (reactive) vs C isolates the external extractor--verifier
+against simply prompting the model to self-check, holding tool-forcing
+constant. C is re-run under this definition; the earlier unforced
+self-verify variant is superseded.
 
-\textbf{D} (post-hoc Sonnet verifier) sends \texttt{(case, candidate
-answer)} to a Sonnet reviewer after the primary model produces a
-final answer (prompt in \cref{lst:prompt_d}). On flag, the model is
+\textbf{D} (force-tool + post-hoc Sonnet output verifier) runs the
+primary model on the same forced-tool footing as the input-verification
+arms (the B$'$ system prompt), then sends \texttt{(case, candidate
+answer)} to a Sonnet reviewer after the final answer is produced
+(reviewer prompt in \cref{lst:prompt_d}). On flag, the model is
 re-prompted once with the reviewer's one-sentence issue. D is the
-closest analog to ``check the final answer'' verification approaches.
+closest analog to ``check the final answer'' verification approaches,
+and running it on the B$'$ footing makes it a matched comparator for
+the input-verification arms: B$'$+E checks the inputs \emph{before}
+dispatch, D checks the answer \emph{after}, with tool-forcing held
+constant. D is re-run under this definition; the earlier unforced
+variant is superseded.
 
 \begin{table}[!htbp]
   \centering
@@ -181,8 +199,8 @@ closest analog to ``check the final answer'' verification approaches.
     B$'$+E (reactive)              & primary      & yes & force-tool & deterministic  & reactive per-call         \\
     B$'$+E (reactive + citations)  & primary      & yes & force-tool & deterministic  & reactive + source spans   \\
     B$'$+E (reactive + k-shot)     & primary      & yes & force-tool & deterministic  & reactive + $k{=}3$ vote   \\
-    C                              & exploratory  & yes & self-verify& prompt-only    & --                       \\
-    D                              & exploratory  & yes & none       & post-hoc Sonnet& --                       \\
+    C                              & exploratory  & yes & force-tool + self-verify & prompt-only    & --             \\
+    D                              & exploratory  & yes & force-tool & post-hoc Sonnet& --                       \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -474,12 +492,18 @@ accuracies are reported with Wilson~\citep{wilson1927} 95\%
 confidence intervals. Effect sizes ($\Delta$ accuracy in percentage
 points) are reported alongside $p$-values.
 
-A secondary contrast --- B$'$+E (upfront) vs B$'$+E (reactive),
-isolating placement holding all other axes fixed --- is reported
-as a within-architecture comparison; it is included in the same
-Bonferroni family if pre-registered as the seventh contrast, or as
-exploratory if not. The exploratory comparators C and D are not in
-the primary family and are not Bonferroni-corrected.
+Four secondary contrasts are reported outside the primary family and
+are not Bonferroni-corrected: (i) B$'$+E (upfront) vs B$'$+E
+(reactive), isolating placement holding all other axes fixed;
+(ii) C vs B$'$, testing whether prompting the model to self-check its
+inputs helps over the no-check forced-tool baseline; (iii) B$'$+E
+(reactive) vs C, testing whether the external extractor--verifier
+beats prompt-only self-check on the matched forced-tool footing; and
+(iv) D vs B$'$, the post-hoc output-check comparator on the matched
+forced-tool footing. All four comparators (C, the B$'$+E arms, and D)
+now sit on the same forced-tool footing as B$'$, so they can be read
+as alternative verification methods against a common no-check baseline;
+the legacy unforced C-vs-B and D-vs-B comparisons are superseded.
 
 \subsection{Apparatus Gate}
 \label{sec:methods_gate}
