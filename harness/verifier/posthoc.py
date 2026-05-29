@@ -36,7 +36,7 @@ class _PrimaryAdapter(Protocol):
 class VerifiedResponse:
     text: str
     n_tool_calls: int
-    raw_messages: list[dict[str, Any]]
+    raw_completion: str   # rolling prompt tail from the Qwen3 primary (matches Qwen3Response)
     stop_reason: str
     # Honest cross-condition totals (primary Qwen3 + Sonnet verifier + any
     # revision). Use the *_primary_* and *_verifier_* breakouts below to
@@ -111,7 +111,7 @@ class PostHocVerifierAdapter:
         # Step 4: revision on flag (Qwen3 again, on local GPU)
         revised = False
         final_text = first.text
-        final_messages = first.raw_messages
+        final_completion = getattr(first, "raw_completion", "")
         final_stop = first.stop_reason
         if not verifier_consistent and verifier_issue:
             revised = True
@@ -124,7 +124,7 @@ class PostHocVerifierAdapter:
             second = self.primary.run(revision_prompt, system=system)
             primary_elapsed_s += time.time() - t_revision
             final_text = second.text
-            final_messages = second.raw_messages
+            final_completion = getattr(second, "raw_completion", "")
             final_stop = second.stop_reason
             primary_prompt_tokens += getattr(second, "prompt_tokens", 0)
             primary_completion_tokens += getattr(second, "completion_tokens", 0)
@@ -134,7 +134,7 @@ class PostHocVerifierAdapter:
         return VerifiedResponse(
             text=final_text,
             n_tool_calls=n_tool_calls,
-            raw_messages=final_messages,
+            raw_completion=final_completion,
             stop_reason=final_stop,
             # Honest totals: primary + verifier summed.
             prompt_tokens=primary_prompt_tokens + verifier_prompt_tokens,
