@@ -10,13 +10,10 @@ venv/
 # Notebooks
 .ipynb_checkpoints/
 
-# Experiment outputs — results bundles are too large to commit.
-# Only the documentation lives in git; everything else (per-condition
-# parquets, manifests, plots, raw CSVs, vLLM logs) is reproducible from
-# the per-condition parquets stored on DBFS.
-/results/**
-!/results/README.md
-!/results/RESULTS.md
+# Experiment outputs — the full results bundle (~38 MB) is committed so the
+# paper's artifacts travel with the code. Only transient junk is excluded.
+/results/**/vllm_server.log
+/results/**/cache.db
 
 *.duckdb
 cache.db

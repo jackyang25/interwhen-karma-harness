@@ -1,0 +1,174 @@
+{
+  "exported_at": "2026-05-30T00:34:31.300509+00:00",
+  "harness_git_sha": "unavailable",
+  "interwhen_git_sha": "2d041c2f3ed2a6f0a4b063463b3aef844e7dba5e",
+  "dbr_version": "17.3.x-gpu-ml-scala2.13",
+  "cluster_name": "IDM-H100GPU-Compute_1",
+  "gpu_type": "Standard_NC40ads_H100_v5 (H100 80GB, Azure)",
+  "model_id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
+  "extractor_model": "claude-sonnet-4-6",
+  "dataset": "ekacare/medical_calculator_eval",
+  "dataset_split": "test",
+  "n_vignettes": 1066,
+  "study_design": "9-condition pre-registered (paper \u00a7methods_conditions)",
+  "bonferroni_n": 6,
+  "primary_alpha": 0.008333333333333333,
+  "prereg_config": {
+    "schema_gated_verifier": true,
+    "intervention_style": "query",
+    "abstention": "prompt-only",
+    "sonnet_extraction_temperature": 0.7,
+    "sonnet_seed_strategy": "fresh-per-call",
+    "qwen3_temperature": 0.0,
+    "tool_call_loop_turn_cap": 10,
+    "verifier_reprompt_cap": 2,
+    "citation_validity": "verbatim-substring",
+    "citation_failure": "null",
+    "kshot_voting_rule": "majority-of-3",
+    "kshot_no_majority": "null",
+    "kshot_k": 3,
+    "failure_handling": "drop-and-report"
+  },
+  "all_conditions": {
+    "A": {
+      "group": "anchor",
+      "label": "A"
+    },
+    "B": {
+      "group": "anchor",
+      "label": "B"
+    },
+    "B_prime": {
+      "group": "anchor",
+      "label": "B'"
+    },
+    "B_prime_E": {
+      "group": "primary",
+      "label": "B'+E (upfront)"
+    },
+    "B_prime_E_reactive": {
+      "group": "primary",
+      "label": "B'+E (reactive)"
+    },
+    "B_prime_E_reactive_citations": {
+      "group": "primary",
+      "label": "B'+E (reactive + citations)"
+    },
+    "B_prime_E_reactive_kshot": {
+      "group": "primary",
+      "label": "B'+E (reactive + k-shot)"
+    },
+    "C": {
+      "group": "exploratory",
+      "label": "C"
+    },
+    "D": {
+      "group": "exploratory",
+      "label": "D"
+    }
+  },
+  "primary_contrasts": [
+    {
+      "label": "B_vs_A",
+      "left": "B",
+      "right": "A"
+    },
+    {
+      "label": "B_prime_vs_B",
+      "left": "B_prime",
+      "right": "B"
+    },
+    {
+      "label": "B_prime_E_vs_B_prime",
+      "left": "B_prime_E",
+      "right": "B_prime"
+    },
+    {
+      "label": "B_prime_E_reactive_vs_B_prime",
+      "left": "B_prime_E_reactive",
+      "right": "B_prime"
+    },
+    {
+      "label": "B_prime_E_reactive_citations_vs_B_prime_E_reactive",
+      "left": "B_prime_E_reactive_citations",
+      "right": "B_prime_E_reactive"
+    },
+    {
+      "label": "B_prime_E_reactive_kshot_vs_B_prime_E_reactive",
+      "left": "B_prime_E_reactive_kshot",
+      "right": "B_prime_E_reactive"
+    }
+  ],
+  "axis_contrasts": [
+    {
+      "axis": "placement",
+      "left": "B_prime_E",
+      "right": "B_prime_E_reactive",
+      "description": "upfront vs reactive (bare, k=1)"
+    },
+    {
+      "axis": "output_format",
+      "left": "B_prime_E_reactive",
+      "right": "B_prime_E_reactive_citations",
+      "description": "bare vs citation (reactive, k=1)"
+    },
+    {
+      "axis": "sampling",
+      "left": "B_prime_E_reactive",
+      "right": "B_prime_E_reactive_kshot",
+      "description": "k=1 vs k=3 voting (reactive, bare)"
+    }
+  ],
+  "run_records": [
+    {
+      "condition": "C",
+      "started_at": 1780072673.325117,
+      "legacy_backup": "/dbfs/results/qwen3_condition_C_full_backup_20260529_163753",
+      "pilot": {
+        "accuracy": 0.7,
+        "n": 10,
+        "parse_failures": 0,
+        "mean_tool_calls": 3.7
+      },
+      "full": {
+        "accuracy": 0.6913696060037523,
+        "ci_low": 0.6629941361752835,
+        "ci_high": 0.7183707816226731,
+        "n": 1066,
+        "parse_failures": 15,
+        "mean_tool_calls": 3.4409005628517826,
+        "mean_total_tokens": 29785.282363977487,
+        "median_latency_s": 901.5719994306564,
+        "total_run_seconds": 7228.75333571434,
+        "estimated_usd_h100": 6.023961113095283
+      },
+      "status": "ok",
+      "ended_at": 1780080090.3855217
+    },
+    {
+      "condition": "D",
+      "started_at": 1780080090.481686,
+      "legacy_backup": "/dbfs/results/qwen3_condition_D_full_backup_20260529_184130",
+      "pilot": {
+        "accuracy": 0.8,
+        "n": 10,
+        "parse_failures": 0,
+        "mean_tool_calls": 4.0
+      },
+      "full": {
+        "accuracy": 0.7073170731707317,
+        "ci_low": 0.679298216248517,
+        "ci_high": 0.733847111365936,
+        "n": 1066,
+        "parse_failures": 18,
+        "mean_tool_calls": 3.8320825515947465,
+        "mean_total_tokens": 31950.589118198874,
+        "median_latency_s": 836.750474691391,
+        "total_run_seconds": 7428.24582362175,
+        "estimated_usd_h100": 6.190204853018125
+      },
+      "status": "ok",
+      "ended_at": 1780087669.8306625
+    }
+  ]
+}

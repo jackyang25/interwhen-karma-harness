@@ -1,0 +1,7 @@
+,label,left,right,n_paired,accuracy_left,accuracy_right,delta_pp,mcnemar_b,mcnemar_c,p_uncorrected,status,p_bonferroni,significant_at_family_0.05,significant_at_per_test_alpha
+B_vs_A,B_vs_A,B,A,1066,0.5028142589118199,0.4155722326454034,8.724202626641647,143,50,3.5364064049853886e-11,ok,2.1218438429912333e-10,True,True
+B_prime_vs_B,B_prime_vs_B,B_prime,B,1066,0.7157598499061913,0.5028142589118199,21.294559099437148,271,44,3.844015684128047e-37,ok,2.306409410476828e-36,True,True
+B_prime_E_vs_B_prime,B_prime_E_vs_B_prime,B_prime_E,B_prime,1066,0.725140712945591,0.7157598499061913,0.9380863039399667,29,19,0.19393085228240695,ok,1.0,False,False
+B_prime_E_reactive_vs_B_prime,B_prime_E_reactive_vs_B_prime,B_prime_E_reactive,B_prime,1066,0.7223264540337712,0.7157598499061913,0.6566604127579811,32,25,0.42677673653298365,ok,1.0,False,False
+B_prime_E_reactive_citations_vs_B_prime_E_reactive,B_prime_E_reactive_citations_vs_B_prime_E_reactive,B_prime_E_reactive_citations,B_prime_E_reactive,1066,0.725140712945591,0.7223264540337712,0.2814258911819856,32,29,0.7978938831986565,ok,1.0,False,False
+B_prime_E_reactive_kshot_vs_B_prime_E_reactive,B_prime_E_reactive_kshot_vs_B_prime_E_reactive,B_prime_E_reactive_kshot,B_prime_E_reactive,1066,0.7204502814258912,0.7223264540337712,-0.18761726078799779,26,28,0.8917558535067943,ok,1.0,False,False

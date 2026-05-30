@@ -1,0 +1,7 @@
+A second reading of the patient case (by an independent extractor) disagrees with one or more of the input values you planned to pass to this tool call:
+
+{violations}
+
+Please re-read the case carefully and determine, for each disagreeing field, which value the vignette actually supports. If the case clearly supports your original value, keep it. If the case clearly supports the extractor's value, use that. If the case does not clearly specify the field, return that field's value as null and explain your reasoning.
+
+Then call the tool again with the values the case supports.

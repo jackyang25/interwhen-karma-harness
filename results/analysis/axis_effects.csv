@@ -1,0 +1,4 @@
+axis,description,left,right,accuracy_left,accuracy_right,delta_pp,mcnemar_b,mcnemar_c,p_uncorrected
+placement,"upfront vs reactive (bare, k=1)",B_prime_E,B_prime_E_reactive,0.725140712945591,0.7223264540337712,0.2814258911819856,30,27,0.7910815129207817
+output_format,"bare vs citation (reactive, k=1)",B_prime_E_reactive,B_prime_E_reactive_citations,0.7223264540337712,0.725140712945591,-0.2814258911819856,29,32,0.7978938831986565
+sampling,"k=1 vs k=3 voting (reactive, bare)",B_prime_E_reactive,B_prime_E_reactive_kshot,0.7223264540337712,0.7204502814258912,0.18761726078799779,28,26,0.8917558535067943
