@@ -1,19 +1,11 @@
 % =============================================================================
-% ABSTRACT — pending rewrite after the new 9-condition rerun.
-%
-% The narrative below corresponds to the prior 8-condition run (un-gated
-% comparison surface, correction-style intervention). It is preserved as
-% scaffolding so the structure is in place when new numbers arrive. After
-% the rerun, replace the discussion of mechanisms with the best-practice
-% study results: (1) does verifier-guided extraction help under
-% schema-gating + query intervention + abstention? (2) does extraction
-% placement (upfront vs reactive) matter? (3) do citations or k-shot
-% voting close any residual gap to B'?
-%
-% Bonferroni n is now 6 (not 4); per-test threshold is now alpha=0.00833.
+% ABSTRACT — design narrative is current (9-condition, best-practice). Only the
+% headline-results paragraph is TBD; fill it after the primary study rerun:
+%   (1) does verifier-guided extraction beat B' under schema-gating + query
+%       intervention + abstention? (2) does placement (upfront vs reactive)
+%       carry the effect? (3) do citations or k-shot close any residual gap?
+% Bonferroni n = 6; per-test alpha = 0.00833.
 % =============================================================================
-
-\textbf{[ABSTRACT TBD --- update after primary study rerun.]}
 
 Verifier-guided reasoning (interwhen-style) intercepts an LLM's intermediate
 reasoning steps and asks an external verifier to approve them before they
@@ -35,14 +27,20 @@ values vs citation-anchored pairs), and sampling ($k=1$ vs $k=3$ majority
 vote). Six paired McNemar contrasts are pre-registered at family
 $\alpha=0.05$ (Bonferroni-corrected per-test $\alpha=0.00833$).
 
-\textbf{[Headline results TBD]} --- to be filled after the primary
-study rerun. Expected structure: (1) whether any extractor pipeline
-improves accuracy over the forced-tool baseline B$'$ at the
-pre-registered significance level; (2) which architectural axis
-(placement, format, sampling) carries the effect, if any;
-(3) cost-accuracy tradeoffs across the four pipelines.
-
-The best-practice configuration was motivated by pilot diagnostics
-reported in \cref{sec:methods_pilots}; the schema gate and query-style
-intervention address, by construction, two failure modes those pilots
-exposed.
+The apparatus gate held (Sonnet on B reached $80.4\%$, within $\pm 3$
+pp of the published $81.9\%$ reference). Accuracy is driven by tool use,
+not by verification: it rises from $41.6\%$ without tools (A) to
+$50.3\%$ with tools (B) to $71.6\%$ when tool use is forced (B$'$; both
+$p_{\text{Bonf}} < 10^{-9}$). \textbf{None of the four
+verifier-guided extractor pipelines improved on B$'$}: all landed
+within $0.9$ pp ($72.0$--$72.5\%$), and no pre-registered contrast
+against B$'$ reached significance. Extraction placement, citation
+grounding, and $k=3$ voting each had no measurable effect, though
+reactive extraction matched upfront accuracy at $\sim$$40\%$ of the
+token cost. The null is informative: the identical mechanism
+\emph{harmed} accuracy when un-gated (pilot diagnostics), so
+best-practice hygiene removes that harm and returns the verifier to
+parity with B$'$ rather than adding value on top of it. The binding
+constraint is the LLM-extracted reference layer, not the verifier
+mechanism --- procedural input verification helps only as much as the
+reference it is given is correct.

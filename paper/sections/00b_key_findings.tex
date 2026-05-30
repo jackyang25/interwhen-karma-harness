@@ -3,21 +3,26 @@
 % Bonferroni n is now 6; per-test threshold is alpha=0.00833.
 % =============================================================================
 
-\textbf{[KEY FINDINGS TBD --- update after primary study rerun.]}
-
 \begin{itemize}\setlength\itemsep{3pt}
-  \item \textbf{[TBD]} Does verifier-guided extraction at best-practice
-        configuration (schema-gated, query-intervention,
-        prompt-only abstention) improve accuracy over the forced-tool
-        baseline B$'$? Report McNemar $p$ vs B$'$ for upfront,
-        reactive, reactive+citations, reactive+k-shot.
-  \item \textbf{[TBD]} Does extraction placement (upfront vs reactive)
-        carry the effect? Within-architecture contrast at fixed
-        output format and sampling.
-  \item \textbf{[TBD]} Do mechanism arms close the gap? Citation
-        grounding (reactive+citations vs reactive) and $k$-shot
-        voting (reactive+k-shot vs reactive).
-  \item \textbf{[TBD]} Cost-accuracy tradeoff: which architecture is
-        Pareto-efficient on total tokens, on API tokens, and on
-        median wall-clock latency.
+  \item \textbf{No verifier-guided extractor beats the forced-tool
+        baseline.} All four B$'$+E pipelines land within $0.9$ pp of
+        B$'$ ($71.6$--$72.5\%$); none of the four pre-registered
+        contrasts against B$'$ is significant ($p_{\text{Bonf}} = 1.0$).
+  \item \textbf{Accuracy comes from tool use, not verification.} The
+        only significant primary contrasts are B vs A ($+8.7$ pp) and
+        B$'$ vs B ($+21.3$ pp); forced tool use is the dominant lever.
+  \item \textbf{No architectural axis carries an effect.} Placement
+        (upfront vs reactive, $p = 0.79$), citation grounding
+        ($p = 0.80$; half of all spans failed substring validation),
+        and $k=3$ voting ($p = 0.89$; $23.7\%$ of field-votes reached
+        no majority) are all null.
+  \item \textbf{Reactive extraction is the cost-efficient pipeline.}
+        It matches upfront accuracy at $\sim$$40\%$ of the token cost
+        ($32$K vs $79$K per vignette); $k$-shot is costliest and
+        slowest for no gain.
+  \item \textbf{The null is informative.} The same mechanism
+        \emph{harmed} accuracy when un-gated (pilot diagnostics);
+        best-practice hygiene removes that harm and returns the
+        verifier to parity with B$'$. The binding constraint is the
+        LLM-extracted reference layer, not the verifier.
 \end{itemize}

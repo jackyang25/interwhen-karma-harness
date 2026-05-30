@@ -87,23 +87,21 @@ verifier'' refers to procedural input verification specifically.
 
 Procedural input verification is a \emph{special case} of
 reasoning-trace verification: the model's tool-call emission is one
-step in its trace, and we intercept at that step. What distinguishes
-our setting is where the verifier's reference comes from and where the
-commit point sits. Interwhen recovers verifiable state by polling the
-trace at intervals; in a clinical agent most of that trace is
-unstructured prose, and the reference the verifier needs --- the
-patient's actual values --- is not in the trace at all but in the case
-text. The model's typed tool-call payload is the first point in the
-trace where a machine-checkable structured commit exists, and the
-calculator's input schema defines exactly what fields constitute that
-commit. A flag therefore
-localizes to a specific (calculator, field, value) tuple --- auditable
-in the way clinical safety reviews require. Second, existing clinical
+step in its trace, and we intercept at that step. Two properties make
+the tool-call boundary the natural commit point in a clinical agent.
+First, most of the agent's trace is unstructured prose with no
+machine-checkable state; the typed tool-call payload is the first point
+where a structured commit exists, and the calculator's input schema
+defines exactly what fields constitute it, so a flag localizes to a
+specific (calculator, field, value) tuple --- auditable in the way
+clinical safety reviews require. Second, existing clinical
 decision-support pipelines already \emph{have} these tool boundaries
 (risk calculators, formularies, eligibility checkers, FHIR queries),
 so input verification inserts at a place the deployment architecture
 already exposes, rather than requiring the workflow to be restructured
-around inline reasoning checks.
+around inline reasoning checks. (Where the reference comes from --- the
+case rather than the trace --- is the subject of
+\cref{sec:bg_reference}.)
 
 \subsection{The Reference-Extraction Problem}
 \label{sec:bg_reference}

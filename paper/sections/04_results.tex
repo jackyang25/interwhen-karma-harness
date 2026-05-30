@@ -17,12 +17,11 @@
 % published 81.9% KARMA reference). Update this paragraph after the
 % rerun's apparatus-gate JSON is produced.
 
-\textbf{[TBD --- fill from apparatus-gate JSON in result bundle]}
-Sonnet on Condition B reached \texttt{XX.X\%} accuracy ($N=1066$),
-\textbf{[within / outside]} the pre-registered band defined in
-\cref{sec:methods_gate}. The gate \textbf{[passed / failed]}
-($\Delta = \texttt{XX.X}$ pp). Primary contrasts below are
-interpretable only because this gate held.
+Sonnet on Condition B reached $80.4\%$ accuracy ($857/1066$),
+\emph{within} the pre-registered band $[78.9\%, 84.9\%]$ defined in
+\cref{sec:methods_gate}. The gate \textbf{passed}
+($\Delta = -1.51$ pp from the $81.9\%$ reference). The primary contrasts
+below are interpretable only because this gate held.
 
 \FloatBarrier
 \subsection{Primary Comparisons (Pre-Registered)}
@@ -34,28 +33,44 @@ pre-registered McNemar contrasts at Bonferroni $\alpha = 0.00833$.
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=0.92\linewidth]{forest_accuracy.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Forest plot: per-condition accuracy with Wilson 95\% CIs ($N=1066$).
-    Order: A, B, B$'$, B$'$+E (upfront), B$'$+E (reactive),
-    B$'$+E (reactive + citations), B$'$+E (reactive + k-shot), C, D.
-    Color encodes group (anchor / primary / exploratory).}}
+  \includegraphics[width=0.92\linewidth]{forest_accuracy.pdf}
   \caption{Per-condition accuracy with Wilson 95\% confidence intervals
   ($N=1066$). Color encodes condition group.}
   \label{fig:forest}
 \end{figure}
 
-\textbf{[TBD --- headline paragraph.]} Replace with the headline result
-once numbers are in. Recommended structure: (1) does any primary
-condition beat B$'$ after Bonferroni? (2) does extraction placement
-matter (upfront vs reactive)? (3) does any mechanism arm
-(citations, k-shot) improve over the reactive baseline?
+The two scaffolding contrasts behave as expected and bound the room any
+verifier has to work in: tool access lifts accuracy from $41.6\%$ (A) to
+$50.3\%$ (B; $\Delta = +8.7$ pp, $p_{\text{Bonf}} = 2.1\times10^{-10}$),
+and forcing the model to use a calculator rather than answer from prior
+knowledge lifts it further to $71.6\%$ (B$'$ vs B; $\Delta = +21.3$ pp,
+$p_{\text{Bonf}} = 2.3\times10^{-36}$). Forced tool use, not the
+verifier, is the dominant lever.
 
-\textit{What this does not show.} A null primary result would mean
-that, under best-practice configuration, none of the tested
-extractor pipelines moved accuracy above B$'$ at the pre-registered
-significance level --- not that ``verifier-guided extraction cannot
-help'' in principle.
+\textbf{No extractor pipeline improves on the forced-tool baseline.}
+All four B$'$+E conditions land within $0.9$ pp of B$'$
+($71.6\%$): upfront $72.5\%$, reactive $72.2\%$, reactive+citations
+$72.5\%$, reactive+k-shot $72.0\%$. None of the four pre-registered
+contrasts against B$'$ is significant --- the smallest is upfront vs
+B$'$ at $\Delta = +0.9$ pp ($p = 0.19$, $p_{\text{Bonf}} = 1.0$), and the
+$k$-shot arm is numerically below the reactive baseline. At
+best-practice configuration the verifier shows no significant effect in
+either direction; it sits on top of B$'$.
+
+\textit{What this does and does not show.} This is a null result for
+H1--H4: under schema-gating, query-style intervention, and abstention,
+none of the tested extractor pipelines moved accuracy above B$'$ at the
+pre-registered significance level. It does \emph{not} show that
+verifier-guided extraction ``cannot help'' in principle --- the pilot
+diagnostics (\cref{sec:methods_pilots}) show the same mechanism
+\emph{harming} accuracy when un-gated, so best-practice hygiene's
+contribution here is to remove that harm and return the verifier to
+parity with B$'$, not to add value on top of it. The result is also
+bounded in sensitivity: with the observed discordance ($40$--$60$
+discordant pairs per B$'$+E-vs-B$'$ contrast), the $95\%$ CI on each
+accuracy difference has half-width $\approx 1.3$ pp, so the design
+rules out an improvement larger than $\sim$2--3 pp but is underpowered
+to detect a gain of $1$--$2$ pp.
 
 \FloatBarrier
 \subsection{Extractor Architecture: Placement, Output Format, Sampling}
@@ -65,18 +80,30 @@ This subsection reports the within-architecture contrasts among the
 four primary study conditions. Each pairwise comparison isolates a
 single axis (\cref{sec:methods_extractor}).
 
-\textbf{Placement (upfront vs reactive).} \textit{[TBD]} Compares
-B$'$+E (upfront) against B$'$+E (reactive) holding output format
-and sampling fixed at bare/$k=1$. Report McNemar $p$, discordant
-counts, and $\Delta$ accuracy.
+None of the three axes carries an effect; all three contrasts are far
+from significance.
 
-\textbf{Output format (bare vs citation).} \textit{[TBD]} Compares
-B$'$+E (reactive) against B$'$+E (reactive + citations) holding
-placement and sampling fixed.
+\textbf{Placement (upfront vs reactive).} Upfront ($72.5\%$) and
+reactive ($72.2\%$) are statistically indistinguishable
+($\Delta = +0.3$ pp; $30$ vs $27$ discordant; $p = 0.79$). Placement
+does not change accuracy --- but it changes cost sharply
+(\cref{sec:results_cost}).
 
-\textbf{Sampling (k=1 vs k=3).} \textit{[TBD]} Compares B$'$+E
-(reactive) against B$'$+E (reactive + k-shot) holding placement
-and output format fixed.
+\textbf{Output format (bare vs citation).} Adding verbatim source-span
+grounding does not help ($72.5\%$ vs $72.2\%$; $\Delta = +0.3$ pp;
+$32$ vs $29$ discordant; $p = 0.80$). Half of all citation spans were
+rejected by the substring validator and coerced to null
+($8{,}356/16{,}534$ accepted, $50.5\%$; \cref{sec:results_diagnostic}),
+so citation grounding mostly removed fields from the comparison rather
+than strengthening it.
+
+\textbf{Sampling ($k=1$ vs $k=3$).} Majority voting does not help and is
+numerically slightly worse ($72.0\%$ vs $72.2\%$; $\Delta = -0.2$ pp;
+$26$ vs $28$ discordant; $p = 0.89$). The samples did diverge --- only
+$61.1\%$ of field-votes showed full three-way agreement, $15.2\%$ a
+$2/3$ majority, and $23.7\%$ no majority (coerced to null) --- so the
+$k$-shot machinery was active, not collapsed; it simply did not improve
+the reference.
 
 \FloatBarrier
 \subsection{Flag Composition}
@@ -84,20 +111,31 @@ and output format fixed.
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=0.98\linewidth]{flag_composition.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Top-10 flagged fields under each primary study condition.
-    Compare against the pilot un-gated upfront diagnostic
-    (\cref{sec:methods_pilots}).}}
+  \includegraphics[width=0.98\linewidth]{flag_composition.pdf}
   \caption{Top-10 flagged fields under each primary study extractor
   pipeline.}
   \label{fig:flag_composition}
 \end{figure}
 
-\textbf{[TBD]} Report the post-rerun flag composition under
-schema-gating. By construction, flags on non-required fields are
-zero. Report the residual flag distribution and whether \texttt{sex}
-or any other field still dominates among required-field flags.
+Schema-gating reshapes the flag distribution as designed. Under upfront
+extraction the verifier intervened on $130$ vignettes ($12.2\%$) with
+$336$ total violations; by construction every flag is on a
+calculator-required field, so the $58.6\%$ non-required-field share seen
+in the un-gated pilot (\cref{sec:methods_pilots}) is zero here. The
+single-field dominance also eases: \texttt{sex} accounts for $76/336$
+flags ($22.6\%$, down from $32\%$ in the pilot), followed by
+\texttt{age} ($29$), \texttt{activity\_factor} ($19$), and
+\texttt{height} ($15$). On the rows where the verifier did fire, the
+model still produced the correct final answer $74.6\%$ of the time ---
+i.e.\ most interventions did not rescue a wrong answer, consistent with
+the null accuracy effect.
+
+Reactive extraction fires more often ($172$ rows, $16.1\%$; $524$
+violations) and its flags concentrate jointly on \texttt{height} ($73$)
+and \texttt{sex} ($73$), with \texttt{age} ($53$) third; its
+correct-on-intervention rate is lower ($66.9\%$). The reactive pipeline
+re-extracts at each tool call, so common fields are re-checked more
+often --- more flags, but no better accuracy.
 
 \FloatBarrier
 \subsection{Per-Category and Stratified Effects}
@@ -105,18 +143,28 @@ or any other field still dominates among required-field flags.
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=0.92\linewidth]{category_heatmap.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Accuracy by calculator category $\times$ condition for the 9
-    conditions.}}
-  \caption{Accuracy by calculator category $\times$ condition.}
+  \includegraphics[width=0.92\linewidth]{category_heatmap.pdf}
+  \caption{Accuracy by calculator category $\times$ condition, for the
+  primary comparison: B$'$ and the four B$'$+E pipelines. (Per-category
+  values for the other conditions are recomputable from the released
+  per-vignette data.)}
   \label{fig:category_heatmap}
 \end{figure}
 
-\textbf{[TBD]} Report whether any primary condition's effect is
-concentrated in or absent from specific calculator categories, and
-the stratified subset of vignettes where every condition invoked
-tools.
+No calculator category shows a systematic B$'$+E gain over B$'$. Across
+the 24 categories the per-condition differences are small and
+non-monotonic --- upfront edges B$'$ in a few low-$n$ categories (e.g.\
+BMI $0.52\to0.62$, percentile $0.81\to0.94$, hematology $0.89\to0.94$)
+but is level or behind in others (e.g.\ cardiovascular $0.81\to0.79$,
+dietary $0.60\to0.59$) --- consistent with noise around a null main
+effect rather than a localized benefit.
+
+Restricting to the $166$ vignettes on which \emph{every} condition
+invoked a tool (the stratified subset) does not change the picture:
+B$'$ reaches $75.3\%$ and the four B$'$+E pipelines fall between
+$72.3\%$ and $75.9\%$, all overlapping. On this tool-using subset the
+no-tools floor A collapses to $15.7\%$, underscoring that the headline
+accuracy is carried by tool use, not by verification.
 
 \FloatBarrier
 \subsection{Cost and Latency}
@@ -140,36 +188,38 @@ tools.
     \toprule
     Condition & Total tokens & API tokens & Latency (s) \\
     \midrule
-    A                                & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B (baseline)                     & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$                             & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (upfront)                 & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive)                & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + citations)    & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + k-shot)       & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    C                                & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    D                                & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
+    A                                & $2{,}976$  & $0$       & ---    \\
+    B (baseline)                     & $8{,}328$  & $0$       & $15.5$ \\
+    B$'$                             & $29{,}901$ & $0$       & $47.5$ \\
+    B$'$+E (upfront)                 & $78{,}836$ & $47{,}478$ & $49.9$ \\
+    B$'$+E (reactive)                & $32{,}211$ & $928$     & $52.1$ \\
+    B$'$+E (reactive + citations)    & $32{,}570$ & $1{,}063$ & $55.5$ \\
+    B$'$+E (reactive + k-shot)       & $34{,}121$ & $2{,}823$ & $68.7$ \\
+    C                                & $29{,}785$ & $0$       & $54.8$ \\
+    D                                & $31{,}951$ & $971$     & $56.9$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\textbf{[TBD]} Compare per-vignette token cost and single-request
-latency across the four extractor pipelines. Expected ordering on
-total tokens: reactive $<$ reactive+citations $<$ reactive+k-shot
-$<$ upfront (the upfront $\sim$50K-token call dominates everything
-the reactive variants do). Expected ordering on latency: reactive
-$\approx$ upfront $<$ reactive+k-shot, because k-shot dispatches its
-three samples sequentially ($\sim$$3\times$ the single-sample
-extraction latency, \cref{sec:methods_extractor_kshot}). Latency is
-measured at fixed single-worker concurrency so the comparison reflects
-single-request deployment time rather than batch contention.
+The four pipelines reach the same accuracy at very different cost, so
+the comparison is decided entirely on cost. Upfront extraction is the
+clear outlier: its single full-schema ($\sim$500-field) Sonnet call
+costs $\sim$$47$K API tokens per vignette and drives total tokens to
+$78{,}836$ --- roughly $2.4\times$ the reactive pipeline's $32{,}211$
+for identical accuracy ($72.5\%$ vs $72.2\%$). The two mechanism arms
+add cost without accuracy: citations is essentially free over reactive
+($+359$ tokens) but $k$-shot triples the extractor's API tokens
+($928 \to 2{,}823$) and is the slowest pipeline at $68.7$ s median
+single-request latency, because its three samples dispatch
+sequentially. Reactive is therefore Pareto-dominant among the verifier
+pipelines --- cheapest in tokens, second-fastest, and tied on accuracy.
+None of them, however, is Pareto-efficient against B$'$ itself
+($29{,}901$ tokens, $47.5$ s), which matches their accuracy at lower
+cost.
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=0.92\linewidth]{token_decomposition.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Per-vignette token cost decomposed into primary-model (Qwen3)
-    and external API (Sonnet) tokens, by condition.}}
+  \includegraphics[width=0.92\linewidth]{token_decomposition.pdf}
   \caption{Per-vignette token cost decomposed into primary-model and
   external API tokens.}
   \label{fig:tokens}
@@ -177,19 +227,14 @@ single-request deployment time rather than batch contention.
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=0.88\linewidth]{pareto.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Cost--accuracy frontier across the 9 conditions.}}
+  \includegraphics[width=0.88\linewidth]{pareto.pdf}
   \caption{Cost--accuracy frontier.}
   \label{fig:pareto}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  % \includegraphics[width=\linewidth]{latency_panels.pdf}
-  \fbox{\parbox{0.85\linewidth}{\centering \textbf{[FIGURE TBD]}\\
-    Latency vs accuracy (left) and latency vs token cost (right) for
-    the 9 conditions.}}
+  \includegraphics[width=\linewidth]{latency_panels.pdf}
   \caption{Latency vs accuracy (left) and latency vs token cost
   (right).}
   \label{fig:latency}
@@ -206,15 +251,15 @@ single-request deployment time rather than batch contention.
     \toprule
     Condition & Group & Accuracy & 95\% CI \\
     \midrule
-    A                                & anchor       & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B (baseline)                     & anchor       & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$                             & anchor       & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (upfront)$^\dagger$        & primary      & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive)$^\dagger$       & primary      & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + citations)$^\dagger$ & primary & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + k-shot)$^\dagger$ & primary  & \texttt{[TBD]} & \texttt{[TBD]} \\
-    C                                & exploratory  & \texttt{[TBD]} & \texttt{[TBD]} \\
-    D                                & exploratory  & \texttt{[TBD]} & \texttt{[TBD]} \\
+    A                                & anchor       & $41.6\%$ & $[38.6, 44.5]$ \\
+    B (baseline)                     & anchor       & $50.3\%$ & $[47.3, 53.3]$ \\
+    B$'$                             & anchor       & $71.6\%$ & $[68.8, 74.2]$ \\
+    B$'$+E (upfront)$^\dagger$        & primary      & $72.5\%$ & $[69.8, 75.1]$ \\
+    B$'$+E (reactive)$^\dagger$       & primary      & $72.2\%$ & $[69.5, 74.8]$ \\
+    B$'$+E (reactive + citations)$^\dagger$ & primary & $72.5\%$ & $[69.8, 75.1]$ \\
+    B$'$+E (reactive + k-shot)$^\dagger$ & primary  & $72.0\%$ & $[69.3, 74.7]$ \\
+    C                                & exploratory  & $69.1\%$ & $[66.3, 71.8]$ \\
+    D                                & exploratory  & $70.7\%$ & $[67.9, 73.4]$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -229,12 +274,12 @@ single-request deployment time rather than batch contention.
     \toprule
     Comparison & $b$ & $c$ & $p_{\text{Bonferroni}}$ & Sig.? \\
     \midrule
-    B vs A                                                       & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$ vs B                                                    & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (upfront) vs B$'$                                     & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive) vs B$'$                                    & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + citations) vs B$'$+E (reactive)           & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive + k-shot) vs B$'$+E (reactive)              & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
+    B vs A                                                       & $143$ & $50$ & $2.1\times10^{-10}$ & yes \\
+    B$'$ vs B                                                    & $271$ & $44$ & $2.3\times10^{-36}$ & yes \\
+    B$'$+E (upfront) vs B$'$                                     & $29$  & $19$ & $1.0$               & no  \\
+    B$'$+E (reactive) vs B$'$                                    & $32$  & $25$ & $1.0$               & no  \\
+    B$'$+E (reactive + citations) vs B$'$+E (reactive)           & $32$  & $29$ & $1.0$               & no  \\
+    B$'$+E (reactive + k-shot) vs B$'$+E (reactive)              & $26$  & $28$ & $1.0$               & no  \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -249,10 +294,10 @@ single-request deployment time rather than batch contention.
     \toprule
     Comparison & $b$ & $c$ & $p$ & $\Delta$ acc \\
     \midrule
-    B$'$+E (upfront) vs B$'$+E (reactive)   & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    C vs B$'$                               & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    B$'$+E (reactive) vs C                  & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
-    D vs B$'$                               & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} & \texttt{[TBD]} \\
+    B$'$+E (upfront) vs B$'$+E (reactive)   & $30$ & $27$ & $0.79$   & $+0.3$ \\
+    C vs B$'$                               & $61$ & $87$ & $0.040$  & $-2.4$ \\
+    B$'$+E (reactive) vs C                  & $88$ & $55$ & $0.0075$ & $+3.1$ \\
+    D vs B$'$                               & $38$ & $47$ & $0.39$   & $-0.8$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -260,12 +305,16 @@ single-request deployment time rather than batch contention.
 \subsection{Dropped Vignettes and Completion}
 \label{sec:results_completion}
 
-\textbf{[TBD]} Per-condition counts of vignettes dropped due to
-incomplete runs (API failure, malformed tool call exhaustion,
-re-prompt cap reached mid-stream). Per the pre-registered failure
-policy (\cref{tab:prereg_params}), dropped vignettes are excluded
-from accuracy analysis. If dropped-$N$ exceeds 2\% in any condition,
-investigation is required before interpretation.
+No vignettes were dropped: all nine conditions scored the full
+$N = 1066$, so no accuracy number is computed over a reduced
+denominator and the pre-registered $2\%$ dropped-$N$ investigation
+threshold (\cref{tab:prereg_params}) was never approached. Parse
+failures --- replies from which no numeric prediction could be
+extracted, scored as wrong per \cref{sec:methods_benchmark} --- are
+rare and comparable across conditions: $1$ for A, $11$ for B, $20$ for
+B$'$, $22$--$27$ across the four B$'$+E pipelines, $15$ for C, and $18$
+for D (at most $2.5\%$ of rows). Their near-uniformity across conditions
+means they do not differentially advantage any pipeline.
 
 % =============================================================================
 % LEGACY RESULTS (PRIOR 8-CONDITION RUN) — RETAINED FOR REFERENCE ONLY

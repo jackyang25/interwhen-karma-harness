@@ -1,17 +1,8 @@
 % =============================================================================
-% DISCUSSION — results-agnostic skeleton for the 9-condition study.
-%
-% No numerical claim appears here until the rerun lands. Each subsection
-% states what it interprets and leaves a [TBD] hook for the observed
-% outcome. Sections 5.2 and 5.3 are interpretive frameworks (the lens we
-% apply to whatever the results show), not findings. Section 5.5/5.7 are
-% results-agnostic and reusable as written.
+% DISCUSSION — 9-condition study, populated from the result bundle.
+% Findings (5.1) and the cost-model/tool-forcing interpretation (5.2-5.3)
+% draw on results/analysis/*; threats (5.5) and scope (5.7) are general.
 % =============================================================================
-
-\textbf{[DISCUSSION --- principal-findings numbers TBD after rerun. The
-interpretive framework (\cref{sec:disc_extractor,sec:disc_toolforcing}),
-threats (\cref{sec:disc_limitations}), and scope statements
-(\cref{sec:disc_notclaim}) are results-agnostic and final.]}
 
 \subsection{Principal Findings}
 \label{sec:disc_summary}
@@ -22,24 +13,32 @@ the contrasts in \cref{sec:results_primary,sec:results_architecture}.
 
 \begin{itemize}\setlength\itemsep{3pt}
   \item \textbf{H1/H2 (does best-practice verifier-guided extraction
-        beat B$'$?).} \textbf{[TBD]} --- report the McNemar verdict for
-        upfront and reactive against B$'$, and state plainly whether
-        either cleared the Bonferroni threshold.
-  \item \textbf{H3 (citations).} \textbf{[TBD]} --- whether citation
-        grounding moved accuracy over the reactive baseline.
-  \item \textbf{H4 ($k$-shot).} \textbf{[TBD]} --- whether $k=3$
-        majority voting moved accuracy over the reactive baseline.
-  \item \textbf{Anchor (does tool access help?).} \textbf{[TBD]} ---
-        the B-vs-A and B$'$-vs-B contrasts, which bound the room any
-        verifier has to improve and are reported here only as context,
-        not as a claim about verification.
+        beat B$'$?).} No. Both upfront ($72.5\%$ vs $71.6\%$;
+        $p_{\text{Bonf}} = 1.0$) and reactive ($72.2\%$;
+        $p_{\text{Bonf}} = 1.0$) are statistically indistinguishable
+        from B$'$. Neither cleared the Bonferroni threshold; neither
+        came close.
+  \item \textbf{H3 (citations).} No. Citation grounding does not move
+        accuracy over reactive ($+0.3$ pp, $p = 0.80$) --- and half of
+        all source spans failed substring validation, so it mostly
+        removed fields from the comparison.
+  \item \textbf{H4 ($k$-shot).} No. $k=3$ voting is if anything
+        slightly worse than single-sample reactive ($-0.2$ pp,
+        $p = 0.89$), despite the samples genuinely diverging
+        ($23.7\%$ of field-votes reached no majority).
+  \item \textbf{Anchor (does tool access help?).} Yes, decisively, and
+        this is where the accuracy lives: tool access (B vs A,
+        $+8.7$ pp) and especially forced tool use (B$'$ vs B,
+        $+21.3$ pp) are the only significant primary contrasts. They
+        bound the room a verifier has to improve and are not themselves
+        claims about verification.
 \end{itemize}
 
-The interpretation in the remainder of this section applies whichever
-way the primary contrasts resolve; \cref{sec:disc_extractor,sec:disc_toolforcing}
-are the lens we use to explain any residual gap between the
-best-practice extractor pipelines and B$'$, and they do not presuppose
-a particular sign of that gap.
+The four primary hypotheses therefore all fail to reject the null: at
+best-practice configuration the input verifier sits on top of B$'$
+without moving accuracy. The rest of this section explains \emph{why}
+the gap is null --- and why that is the expected outcome once the
+reference layer is taken seriously.
 
 \subsection{Interpreting a Residual Gap: The Reference Layer}
 \label{sec:disc_extractor}
@@ -70,9 +69,18 @@ this cost. The schema gate (\cref{sec:methods_verifier}) restricts the
 comparison to required fields, which shrinks the surface on which term
 (b) can act; the four extractor pipelines vary placement, output
 format, and sampling, each of which is a different attempt to lower
-term (b). \textbf{[TBD: tie the observed per-pipeline gaps to which
-term moved --- e.g., whether reactive scoping or $k$-shot voting
-measurably lowered the false-flag rate.]}
+term (b). Empirically, none of the three levers moved accuracy, so none
+measurably shifted the balance of terms (a)--(c). The flag statistics
+are consistent with this: reactive extraction fired \emph{more} often
+than upfront ($16.1\%$ vs $12.2\%$ of vignettes) yet had a \emph{lower}
+correct-on-intervention rate ($66.9\%$ vs $74.6\%$), so its extra
+interventions were not net-corrective. The likeliest reading is that,
+once tool use is forced, the primary model's input-error rate on
+required fields (term a) is already low --- B$'$ alone reaches
+$71.6\%$ --- so there are few wrong calls for a true flag to rescue,
+while the residual false flags from term (b) roughly cancel whatever
+true flags remain. The verifier lands at parity because, post-gating,
+both kinds of flag are rare and approximately balanced.
 
 A subtlety the cost model alone misses: ``extraction error'' is
 broader than ``the extractor read the wrong value.'' A flag can fire
@@ -81,10 +89,15 @@ differently from the model's (the \texttt{sex=female} vs
 \texttt{sex=1} pattern traced in \cref{app:loop_trace}). The binding
 constraint there is the join of (extractor canonical form, verifier
 comparison strictness, model serialization) --- any one of the three
-can drive a flag the other two cannot resolve. \textbf{[TBD: report
-whether canonical-form mismatches remain a meaningful share of
-required-field flags under schema-gating, per
-\cref{sec:results_diagnostic}.]}
+can drive a flag the other two cannot resolve. This residue persists
+under schema-gating: \texttt{sex} is still the most-flagged field
+($22.6\%$ of upfront flags, co-top under reactive) --- the same field
+that drives the \texttt{bmi\_001} trace, where the extractor's
+semantically-correct \texttt{female} and the model's \texttt{1} disagree
+only in encoding. Schema-gating removed flags on fields the calculator
+ignores, but it cannot reconcile encoding mismatches on \emph{required}
+fields, so this join keeps term (b)'s false-flag floor above zero and
+is one concrete reason the verifier cannot get ahead of B$'$.
 
 \subsection{Why Tool-Forcing Amplifies the Reference}
 \label{sec:disc_toolforcing}
@@ -98,9 +111,15 @@ reference is applied more often (more fixes), and an unreliable one is
 applied more often (more mis-corrections). The amplification is
 multiplicative in the tool-call rate, and its sign is set entirely by
 the reference quality of \cref{sec:disc_extractor} --- forcing is not
-harmful or helpful on its own. \textbf{[TBD: report the per-condition
-firing rate and intervention rate from \cref{sec:results_diagnostic}
-and state which direction the amplification ran.]}
+harmful or helpful on its own. Here the amplification ran to a wash:
+forcing raised the verifier's exposure as designed (the model emits
+$\sim$$3.7$ tool calls per vignette and the verifier intervened on
+$12.2\%$--$16.1\%$ of vignettes), but with post-gating flags roughly
+balanced between true and false, the larger exposure moved net accuracy
+in neither direction. This is the benign face of the \emph{same}
+amplification that, un-gated, produced the pilot's $\sim$$9$ pp harm
+(\cref{sec:methods_pilots}): schema-gating shrank the false-flag surface
+enough that forcing no longer multiplies a net-negative signal.
 
 \subsection{Implications for Deploying Verifier-Guided Reasoning in Clinical AI}
 \label{sec:disc_implications}
@@ -122,9 +141,14 @@ they remove term (b) for the fields they carry. Reserve LLM extraction
 for fields the structured record does not hold.
 
 \textit{Choose the extractor pipeline on the measured cost--accuracy
-frontier.} \textbf{[TBD: once \cref{sec:results_cost} is in, state
-which pipeline is Pareto-efficient on tokens and latency and under what
-accuracy parity.]}
+frontier.} Among the verifier pipelines, reactive extraction dominates:
+it matches upfront's accuracy at $\sim$$40\%$ of the token cost
+($32$K vs $79$K per vignette) and is faster than $k$-shot
+(\cref{sec:results_cost}). But on this benchmark \emph{no} pipeline is
+Pareto-efficient against B$'$ itself, which matches their accuracy at
+lower cost --- so input verification earns its overhead only where the
+reference can be made more reliable than a single best-practice LLM
+extractor, i.e., under the first two recommendations above.
 
 \subsection{Threats to Validity}
 \label{sec:disc_limitations}
@@ -158,13 +182,15 @@ verifier failures the firing counts cannot see.
 
 \textit{Extractor stochasticity.} The extractor runs at temperature
 $0.7$ (and $k=3$ in one pipeline), so its reference is not
-deterministic across runs. Per-field \emph{value} agreement across
-repeated extractions is high; \emph{field-presence} agreement is
-lower, and because of the conservative no-flag rule, presence variance
-translates into missing flags rather than wrong flags. A repeated run
-would likely shift total flag counts slightly without changing the
-architectural pattern. \textbf{[TBD: confirm against the rerun's
-reproducibility check, \cref{sec:results_diagnostic}.]}
+deterministic across runs. The $k$-shot diagnostics quantify the
+variance directly: across $20{,}271$ field-votes, $61.1\%$ showed full
+three-way agreement, $15.2\%$ a $2/3$ majority, and $23.7\%$ no majority
+at all. So the reference does vary across samples on a meaningful
+minority of fields --- but that variance falls on ambiguous fields,
+not on the common ones (\texttt{sex}, \texttt{age}, \texttt{height})
+that dominate both the flag counts and the accuracy-relevant decisions.
+A repeated run would shift total flag counts slightly without changing
+the architectural pattern or the null verdict.
 
 \textit{Apparatus-gate scope.} The gate (\cref{sec:methods_gate})
 detects drift on the harness, dataset, prompt rendering, and MCP

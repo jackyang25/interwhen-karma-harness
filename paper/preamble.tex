@@ -224,9 +224,6 @@
 % Subject tag and affiliation rendered in the title block. Override
 % either with \renewcommand{...} in main.tex if needed.
 \makeatletter
-\newcommand{\@subject}{Generative AI
-                       \,$\cdot$\, Medical informatics
-                       \,$\cdot$\, Intermediate-step verification}
 \newcommand{\@affiliation}{}   % empty by default; set in main.tex
 
 \renewcommand{\maketitle}{%
@@ -236,8 +233,6 @@
   {\color{accent}\rule{\linewidth}{0.4pt}}\par
   \vspace{12pt}
   \noindent{\sffamily\LARGE\bfseries\@title\par}
-  \vspace{8pt}
-  \noindent{\sffamily\small\itshape\color{accent}\@subject\par}
   \vspace{12pt}
   \noindent{\sffamily\large\@author\par}
   \ifx\@affiliation\@empty\else

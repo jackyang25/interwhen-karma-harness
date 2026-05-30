@@ -2,8 +2,6 @@
 % CONCLUSION — pending rewrite after the new 9-condition rerun.
 % =============================================================================
 
-\textbf{[CONCLUSION TBD --- update after primary study rerun.]}
-
 We evaluated interwhen-style procedural input verification on a
 clinical tool-calling benchmark across nine conditions spanning three
 groups: capability anchors (A, B, B$'$), a primary study of four
@@ -12,14 +10,24 @@ reactive, reactive + citations, reactive + k-shot), and two
 exploratory verifier-mechanism comparators (C, D). Six paired
 contrasts were pre-registered at family $\alpha=0.05$.
 
-\textbf{[TBD]} Replace this paragraph with the bottom-line conclusion
-after the rerun: (1) whether best-practice verifier-guided extraction
-moved accuracy above B$'$; (2) which architectural axis carried the
-effect, if any; (3) the resulting deployment guidance.
+Best-practice verifier-guided extraction did not move accuracy above
+B$'$. All four extractor pipelines matched the forced-tool baseline
+($71.6$--$72.5\%$) with no significant contrast, and no architectural
+axis --- placement, citation grounding, or $k$-shot voting --- carried
+an effect. System accuracy is set by forced tool use ($+21.3$ pp over
+plain tool access); the input verifier, at best-practice configuration,
+neither helps nor hurts. Among the pipelines, reactive extraction is
+the deployment choice --- identical accuracy at $\sim$$40\%$ of
+upfront's token cost. The exploratory alternatives are consistent:
+prompting the model to self-check (C) is no better than B$'$, post-hoc
+output review (D) is no better than B$'$, and the external verifier
+beats prompt-only self-check head-to-head.
 
 Two design choices in the primary study --- the schema-gated verifier
 and the query-style intervention --- were motivated by pilot
 diagnostics (\cref{sec:methods_pilots}) and address by construction two
-failure modes those pilots exposed. The rerun quantifies the residual
-gap, if any, between the best-practice extractor and the no-verifier
-forced-tool baseline.
+failure modes those pilots exposed. That gap proves to be null:
+best-practice hygiene removes the harm the un-gated pilot caused but
+produces no benefit over the forced-tool baseline, locating the binding
+constraint in the LLM-extracted reference rather than the verifier
+mechanism itself.

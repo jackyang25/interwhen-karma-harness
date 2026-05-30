@@ -229,31 +229,6 @@ together at a methodology level. It is not a code reference; the
 canonical implementation lives in the harness repository under
 \verb|harness/|.
 
-\subsubsection{Three Orthogonal Axes}
-
-Every extractor pipeline in the primary study is a point in a
-three-axis configuration space:
-
-\begin{enumerate}\setlength\itemsep{2pt}
-  \item \textbf{Extraction placement.} \emph{Upfront} runs one
-        full-schema Sonnet call before the model begins generation;
-        \emph{reactive} runs one scoped Sonnet call at each
-        \toolname{medical\_calculator\_output} tool-call interception.
-  \item \textbf{Output format.} \emph{Bare} returns
-        \texttt{\{field: value\}}; \emph{citation} returns
-        \texttt{\{field: \{value, source\_span\}\}} where
-        \texttt{source\_span} must be a verbatim substring of the
-        vignette text.
-  \item \textbf{Sampling.} \emph{Single} dispatches one Sonnet call;
-        \emph{k-shot} dispatches $k=3$ independent calls at
-        temperature $0.7$ and reduces per-field by majority vote.
-\end{enumerate}
-
-The four primary study conditions are four points in this space; no
-condition mixes two non-default values on different axes. This
-preserves orthogonality for the pairwise contrasts in
-\cref{sec:methods_stats}.
-
 \subsubsection{Components}
 
 Five components participate in every primary study condition; their

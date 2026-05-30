@@ -22,42 +22,50 @@ ANALYSIS = RESULTS / "analysis"
 FIG_DIR = ROOT / "paper" / "figures"
 plt.style.use(str(FIG_DIR / "paper_style.mplstyle"))
 
-# Palette mirrored from paper/preamble.tex
+# Palette mirrored from paper/preamble.tex. Nine conditions: three anchors,
+# four B'+E extractor pipelines, two exploratory comparators (C, D).
 COLOR = {
-    "A":                 "#B0B0B0",
-    "B":                 "#4A4A4A",
-    "C":                 "#9DC3E6",
-    "D":                 "#4F81BD",
-    "E":                 "#1F4E79",
-    "B_prime":           "#D9A066",
-    "B_prime_E":         "#B45A1F",
-    "B_prime_E_reactive":"#1F5F5B",
+    "A":                            "#B0B0B0",
+    "B":                            "#4A4A4A",
+    "B_prime":                      "#D9A066",
+    "B_prime_E":                    "#B45A1F",
+    "B_prime_E_reactive":           "#1F5F5B",
+    "B_prime_E_reactive_citations": "#2E8B83",
+    "B_prime_E_reactive_kshot":     "#6FB7B1",
+    "C":                            "#9DC3E6",
+    "D":                            "#4F81BD",
 }
 
 PRETTY = {
     "A": "A",
     "B": "B",
+    "B_prime": "B$'$",
+    "B_prime_E": "B$'$+E (up.)",
+    "B_prime_E_reactive": "B$'$+E (react.)",
+    "B_prime_E_reactive_citations": "B$'$+E (cite)",
+    "B_prime_E_reactive_kshot": "B$'$+E ($k$3)",
     "C": "C",
     "D": "D",
-    "E": "E",
-    "B_prime": "B$'$",
-    "B_prime_E": "B$'$+E",
-    "B_prime_E_reactive": "B$'$+E (reactive)",
 }
-# y-axis labels for the forest plot include the rhetorical role inline so
-# we don't need separate annotations below the chart.
+# y-axis labels for the forest plot.
 FOREST_LABEL = {
     "A": "A",
     "B": "B (baseline)",
-    "C": "C",
-    "D": "D",
-    "E": "E",
     "B_prime": "B$'$",
-    "B_prime_E": "B$'$+E",
+    "B_prime_E": "B$'$+E (upfront)",
     "B_prime_E_reactive": "B$'$+E (reactive)",
+    "B_prime_E_reactive_citations": "B$'$+E (reactive + cite)",
+    "B_prime_E_reactive_kshot": "B$'$+E (reactive + $k$-shot)",
+    "C": "C (self-verify)",
+    "D": "D (post-hoc)",
 }
 
-CONDITION_ORDER = ["A", "B", "C", "D", "E", "B_prime", "B_prime_E", "B_prime_E_reactive"]
+CONDITION_ORDER = [
+    "A", "B", "B_prime",
+    "B_prime_E", "B_prime_E_reactive",
+    "B_prime_E_reactive_citations", "B_prime_E_reactive_kshot",
+    "C", "D",
+]
 
 
 # ── Figure 1: Forest plot of accuracies ──────────────────────────────────
@@ -243,8 +251,9 @@ def flag_composition():
 # ── Figure 4: Per-category heatmap ───────────────────────────────────────
 def category_heatmap():
     df = pd.read_csv(ANALYSIS / "per_category_accuracy.csv", index_col=0)
-    # Reorder conditions to match paper narrative
-    df = df[CONDITION_ORDER]
+    # The per-category table is computed over B' + the four primary pipelines
+    # only (see analysis); its columns are already pretty labels, so use them
+    # as-is rather than reindexing by CONDITION_ORDER.
 
     fig, ax = plt.subplots(figsize=(7.5, 6.5))
 
@@ -253,8 +262,8 @@ def category_heatmap():
     im = ax.imshow(data, aspect="auto", cmap="RdYlGn", vmin=0, vmax=1)
 
     # Ticks
-    ax.set_xticks(np.arange(len(CONDITION_ORDER)))
-    ax.set_xticklabels([PRETTY[c] for c in CONDITION_ORDER],
+    ax.set_xticks(np.arange(len(df.columns)))
+    ax.set_xticklabels(list(df.columns),
                        rotation=30, ha="right", fontsize=9)
     ax.set_yticks(np.arange(len(df.index)))
     cleaned = [c.replace("_calculators", "").replace("_", " ") for c in df.index]
@@ -311,7 +320,7 @@ def pareto():
                    linewidth=1.6, zorder=4)
 
     for cond, (x, y) in coords.items():
-        dx, dy, ha, va = LABEL_OFFSET[cond]
+        dx, dy, ha, va = LABEL_OFFSET.get(cond, (1.0, 0.006, "left", "center"))
         ax.text(x + dx, y + dy, PRETTY[cond],
                 ha=ha, va=va, fontsize=10, color="#1A1A1A", zorder=5)
 
@@ -488,7 +497,7 @@ def latency_panels():
         y = acc_df.loc[cond, "accuracy"]
         axL.scatter(x, y, s=110, color=COLOR[cond], edgecolor="white",
                     linewidth=1.6, zorder=4)
-        dx, dy, ha, va = LABEL_OFFSET_ACC[cond]
+        dx, dy, ha, va = LABEL_OFFSET_ACC.get(cond, (8, 0.006, "left", "center"))
         axL.text(x + dx, y + dy, PRETTY[cond], ha=ha, va=va,
                  fontsize=10, color="#1A1A1A", zorder=5)
 
@@ -503,7 +512,7 @@ def latency_panels():
         y = cost_df.loc[cond, "mean_total_tokens"] / 1000   # k-tokens
         axR.scatter(x, y, s=110, color=COLOR[cond], edgecolor="white",
                     linewidth=1.6, zorder=4)
-        dx, dy, ha, va = LABEL_OFFSET_TOK[cond]
+        dx, dy, ha, va = LABEL_OFFSET_TOK.get(cond, (8, 3, "left", "center"))
         axR.text(x + dx, y + dy, PRETTY[cond], ha=ha, va=va,
                  fontsize=10, color="#1A1A1A", zorder=5)
 
@@ -519,12 +528,13 @@ def latency_panels():
 
 
 if __name__ == "__main__":
+    # The six figures the paper includes (Results section). discordant_flow()
+    # and trajectory_flow() are intentionally omitted: they are not referenced
+    # in the paper, and discordant_flow carried hardcoded prior-run numbers.
     forest_accuracy()
-    discordant_flow()
     flag_composition()
     category_heatmap()
     pareto()
     token_decomposition()
-    trajectory_flow()
     latency_panels()
     print(f"\nAll figures written to {FIG_DIR}")

@@ -188,6 +188,7 @@ variant is superseded.
   hygiene (schema-gated verifier, query intervention, prompt-only
   abstention); they vary only in the extractor pipeline.}
   \label{tab:conditions}
+  \resizebox{\textwidth}{!}{%
   \begin{tabular}{llllll}
     \toprule
     Condition & Group & Tools & Sys. prompt & Verifier & Extractor pipeline \\
@@ -202,7 +203,8 @@ variant is superseded.
     C                              & exploratory  & yes & force-tool + self-verify & prompt-only    & --             \\
     D                              & exploratory  & yes & force-tool & post-hoc Sonnet& --                       \\
     \bottomrule
-  \end{tabular}
+  \end{tabular}%
+  }
 \end{table}
 
 \subsection{Pre-Registered Configuration}
@@ -211,7 +213,10 @@ variant is superseded.
 The four primary study conditions are run under identical hygiene and
 sampling configuration; the only inter-condition variation is the
 extractor pipeline. All values below are pre-registered and locked
-prior to the study run; no tuning to results is permitted.
+prior to the study run; no tuning to results is permitted. The two
+mechanisms these properties configure --- the deterministic verifier
+and the fact extractor --- are specified in
+\cref{sec:methods_verifier,sec:methods_extractor}.
 
 \subsubsection{Baked-In Hygiene}
 
