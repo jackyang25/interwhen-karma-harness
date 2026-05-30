@@ -1,13 +1,12 @@
 % =============================================================================
-% KEY FINDINGS — pending rewrite after the new 9-condition rerun.
-% Bonferroni n is now 6; per-test threshold is alpha=0.00833.
+% KEY FINDINGS
 % =============================================================================
 
 \begin{itemize}\setlength\itemsep{3pt}
   \item \textbf{No verifier-guided extractor beats the forced-tool
         baseline.} All four B$'$+E pipelines land within $0.9$ pp of
-        B$'$ ($71.6$--$72.5\%$); none of the four pre-registered
-        contrasts against B$'$ is significant ($p_{\text{Bonf}} = 1.0$).
+        B$'$ ($71.6$--$72.5\%$); none of the four B$'$+E pipelines
+        clears its pre-registered contrast (all $p_{\text{Bonf}} = 1.0$).
   \item \textbf{Accuracy comes from tool use, not verification.} The
         only significant primary contrasts are B vs A ($+8.7$ pp) and
         B$'$ vs B ($+21.3$ pp); forced tool use is the dominant lever.

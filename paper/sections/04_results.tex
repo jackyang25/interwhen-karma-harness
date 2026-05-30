@@ -1,21 +1,9 @@
 % =============================================================================
-% RESULTS
-%
-% Structure for the rerun under the new 9-condition pre-registered design.
-% Numbers are TBD and will be filled in from the result bundle once the
-% primary study run completes. Legacy prose and tables from the prior run
-% are preserved at the bottom of this file in a commented-out block for
-% reference; they correspond to the old 8-condition design and are NOT
-% being re-rendered.
+% RESULTS — populated from results/analysis/* (9-condition study).
 % =============================================================================
 
 \subsection{Apparatus Gate}
 \label{sec:results_gate}
-
-% Apparatus gate carries forward unchanged from the prior run; Sonnet on
-% Condition B is required to fall within [78.9%, 84.9%] (\pm 3 pp of the
-% published 81.9% KARMA reference). Update this paragraph after the
-% rerun's apparatus-gate JSON is produced.
 
 Sonnet on Condition B reached $80.4\%$ accuracy ($857/1066$),
 \emph{within} the pre-registered band $[78.9\%, 84.9\%]$ defined in
@@ -50,10 +38,11 @@ verifier, is the dominant lever.
 \textbf{No extractor pipeline improves on the forced-tool baseline.}
 All four B$'$+E conditions land within $0.9$ pp of B$'$
 ($71.6\%$): upfront $72.5\%$, reactive $72.2\%$, reactive+citations
-$72.5\%$, reactive+k-shot $72.0\%$. None of the four pre-registered
-contrasts against B$'$ is significant --- the smallest is upfront vs
-B$'$ at $\Delta = +0.9$ pp ($p = 0.19$, $p_{\text{Bonf}} = 1.0$), and the
-$k$-shot arm is numerically below the reactive baseline. At
+$72.5\%$, reactive+k-shot $72.0\%$. None of the four B$'$+E pipelines
+significantly exceeds B$'$: no pre-registered contrast clears the
+Bonferroni threshold (all $p_{\text{Bonf}} = 1.0$; smallest raw
+$p = 0.19$, upfront vs B$'$), and the $k$-shot arm is numerically below
+the reactive baseline. At
 best-practice configuration the verifier shows no significant effect in
 either direction; it sits on top of B$'$.
 
@@ -315,65 +304,3 @@ rare and comparable across conditions: $1$ for A, $11$ for B, $20$ for
 B$'$, $22$--$27$ across the four B$'$+E pipelines, $15$ for C, and $18$
 for D (at most $2.5\%$ of rows). Their near-uniformity across conditions
 means they do not differentially advantage any pipeline.
-
-% =============================================================================
-% LEGACY RESULTS (PRIOR 8-CONDITION RUN) — RETAINED FOR REFERENCE ONLY
-% These numbers correspond to the old design (un-gated comparison surface,
-% correction-style intervention). They are NOT re-rendered into the new
-% paper; the pilot motivation they provide is summarized in
-% \cref{sec:methods_pilots}.
-% =============================================================================
-%
-% Sonnet on Condition B reached 80.4\% accuracy ($N=1066$), within the
-% pre-registered band. Gate passed ($\Delta = -1.51$ pp).
-%
-% Primary headline (legacy): Condition E (upfront, un-gated) was numerically
-% the worst primary condition at 48.7\% (vs B's 50.4\%; McNemar
-% $p_{\text{Bonferroni}} = 0.157$, $\Delta = -1.7$ pp). Conditions C
-% (49.4\%) and D (50.1\%) were indistinguishable from B. Only B vs A was
-% significant (50.4\% vs 41.6\%, $\Delta = +8.8$ pp,
-% $p_{\text{Bonferroni}} \approx 10^{-10}$).
-%
-% Exploratory (legacy): B$'$ moved accuracy from 50.4\% to 72.7\%
-% (McNemar $p \approx 10^{-42}$). Adding the un-gated upfront E verifier
-% on top of B$'$ moved accuracy to 63.7\% (Delta = -9.0 pp,
-% $p \approx 10^{-15}$): the un-gated correction-style verifier
-% actively harmed. Reactive (un-gated, correction-style) reached
-% 65.6\% (+1.9 pp vs upfront, not significant; -7.1 pp vs B$'$,
-% $p \approx 10^{-12}$).
-%
-% Flag composition (legacy un-gated upfront): 343 / 1062 flags (32.3\%)
-% on \texttt{sex}; 622 / 1062 (58.6\%) on non-required fields.
-% Reactive (un-gated, correction-style): \texttt{sex} share fell to 13\%.
-%
-% Cost (legacy):
-%   B                 : 8,152 total / 0 API / 123 s
-%   E                 : 59,798 / 50,543 / 87 s
-%   B$'$              : 29,908 / 0 / 408 s
-%   B$'$+E            : 85,702 / 50,353 / 223 s
-%   B$'$+E reactive   : 36,749 / 1,416 / 223 s
-%
-% Legacy accuracy table (8 conditions):
-%   A         primary       41.6\%  [38.6, 44.5]
-%   B         primary       50.4\%  [47.4, 53.4]
-%   C         primary       49.4\%  [46.4, 52.4]
-%   D         primary       50.1\%  [47.1, 53.1]
-%   E         primary       48.7\%  [45.7, 51.7]
-%   B$'$              exploratory   72.7\%  [70.0, 75.3]
-%   B$'$+E            exploratory   63.7\%  [60.8, 66.5]
-%   B$'$+E reactive   exploratory   65.6\%  [62.7, 68.4]
-%
-% Legacy McNemar primary (Bonferroni $\alpha=0.0125$):
-%   B vs A   145 /  51  $p = 1.2 \times 10^{-10}$  significant
-%   E vs B    25 /  43  $p = 0.157$                ns
-%   E vs C    77 /  85  $p = 1.0$                  ns
-%   E vs D    26 /  41  $p = 0.349$                ns
-%
-% Legacy McNemar exploratory (uncorrected):
-%   B$'$ vs B                  270 /  32  $p \approx 10^{-42}$  +22.3 pp
-%   B$'$+E vs B$'$              22 / 118  $p \approx 10^{-16}$  -9.0 pp
-%   B$'$+E vs E                229 /  69  $p \approx 10^{-20}$  +15.0 pp
-%   B$'$+E react. vs B$'$+E     78 /  58  $p = 0.103$           +1.9 pp
-%   B$'$+E react. vs B$'$       22 /  98  $p \approx 10^{-12}$  -7.1 pp
-%
-% =============================================================================
