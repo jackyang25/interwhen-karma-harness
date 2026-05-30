@@ -495,7 +495,7 @@ plt.show()
 # COMMAND ----------
 
 # DBTITLE 1,Per-category heatmap (focus on primary + B' for readability)
-HEATMAP_CONDS = ["B_prime"] + PRIMARY_CONDITIONS  # 5 conditions max for readability
+HEATMAP_CONDS = ["B_prime"] + PRIMARY_CONDITIONS  # primary comparison (B' + 4 B'+E); matches the figure's claim
 cat_df = pd.DataFrame()
 for cond in HEATMAP_CONDS:
     if cond not in dfs or "category" not in dfs[cond].columns:
